@@ -34,8 +34,6 @@ struct fdt_property
     uint32_t name_offset;
 };
 
-#define DTB_HANDLE_LOOKUP_SIZE 128
-
 struct dtb_node_t
 {
     dtb_node* parent;
@@ -63,15 +61,21 @@ struct dtb_state
     dtb_node* root;
 
     dtb_node** handle_lookup;
-    dtb_node* node_alloc;
+    dtb_node* node_buff;
     size_t node_alloc_head;
-    dtb_prop* prop_alloc;
+    size_t node_alloc_max;
+    dtb_prop* prop_buff;
     size_t prop_alloc_head;
+    size_t prop_alloc_max;
 
     dtb_ops ops;
 };
 
 struct dtb_state state;
+
+#ifdef SMOLDTB_STATIC_BUFFER_SIZE
+    uint8_t bigBuff[SMOLDTB_STATIC_BUFFER_SIZE];
+#endif
 
 static uint32_t be32(uint32_t input)
 {
@@ -114,40 +118,79 @@ static size_t dtb_align_up(size_t input, size_t alignment)
 
 static dtb_node* alloc_node()
 {
-    //TODO: assert we're within spec
-    return &state.node_alloc[state.node_alloc_head++];
+    if (state.node_alloc_head + 1 < state.node_alloc_max)
+        return &state.node_buff[state.node_alloc_head++];
+
+    if (state.ops.on_error)
+        state.ops.on_error("Node allocator ran out of space");
+    return NULL;
 }
 
 static dtb_prop* alloc_prop()
 {
-    return &state.prop_alloc[state.prop_alloc_head++];
+    if (state.prop_alloc_head + 1 < state.prop_alloc_max)
+        return &state.prop_buff[state.prop_alloc_head++];
+
+    if (state.ops.on_error)
+        state.ops.on_error("Property allocator ran out of space");
+    return NULL;
 }
 
-static void init_buffers()
+static void free_buffers()
 {
-    size_t nodes = 0;
-    size_t props = 0;
+#ifdef SMOLDTB_STATIC_BUFFER_SIZE
+    state.node_alloc_head = state.node_alloc_max;
+    state.prop_alloc_head = state.prop_alloc_max;
+    return;
+#else
+    if (state.ops.free == NULL)
+    {
+        if (state.ops.on_error)
+            state.ops.on_error("ops.free() is NULL while trying to free buffers.");
+        return;
+    }
+
+    size_t buff_size = state.node_alloc_max * sizeof(dtb_node);
+    buff_size += state.prop_alloc_max * sizeof(dtb_prop);
+    buff_size += state.node_alloc_max * sizeof(void*);
+
+    state.ops.free(state.node_buff, buff_size);
+    state.node_buff = NULL;
+    state.prop_buff = NULL;
+    state.handle_lookup = NULL;
+    state.node_alloc_max = state.prop_alloc_max = 0;
+#endif
+}
+
+static void alloc_buffers()
+{
+#ifdef SMOLDTB_STATIC_BUFFER_SIZE
+    //TODO: implement and test me!
+#else
+    state.node_alloc_max = 0;
+    state.prop_alloc_max = 0;
     for (size_t i = 0; i < state.cell_count; i++)
     {
         if (be32(state.cells[i]) == FDT_BEGIN_NODE)
-            nodes++;
-        if (be32(state.cells[i]) == FDT_PROP)
-            props++;
+            state.node_alloc_max++;
+        else if (be32(state.cells[i]) == FDT_PROP)
+            state.prop_alloc_max++;
     }
 
-    size_t buffer_size = nodes * sizeof(dtb_node);
-    buffer_size += props * sizeof(dtb_prop);
-    buffer_size += DTB_HANDLE_LOOKUP_SIZE * sizeof(void*);
+    size_t total_size = state.node_alloc_max * sizeof(dtb_node);
+    total_size += state.prop_alloc_max * sizeof(dtb_prop);
+    total_size += state.node_alloc_max * sizeof(void*); //we assume the worst case and that each node has a phandle prop
     
-    uint8_t* buffer = state.ops.malloc(buffer_size);
-    for (size_t i = 0; i < buffer_size; i++)
+    uint8_t* buffer = state.ops.malloc(total_size);
+    for (size_t i = 0; i < total_size; i++)
         buffer[i] = 0;
 
-    state.node_alloc = (dtb_node*)buffer;
+    state.node_buff = (dtb_node*)buffer;
     state.node_alloc_head = 0;
-    state.prop_alloc = (dtb_prop*)&state.node_alloc[nodes];
+    state.prop_buff = (dtb_prop*)&state.node_buff[state.node_alloc_max];
     state.prop_alloc_head = 0;
-    state.handle_lookup = (dtb_node**)&state.prop_alloc[props];
+    state.handle_lookup = (dtb_node**)&state.prop_buff[state.prop_alloc_max];
+#endif
 }
 
 static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
@@ -208,6 +251,7 @@ static dtb_prop* parse_prop(size_t* offset)
     const struct fdt_property* fdtprop = (struct fdt_property*)(state.cells + *offset);
     prop->name = (const char*)(state.strings + be32(fdtprop->name_offset));
     prop->first_cell = state.cells + *offset + 2;
+    (*offset) += (dtb_align_up(be32(fdtprop->length), 4) / 4) + 2;
     
     return prop;
 }
@@ -218,7 +262,7 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
         return NULL;
 
     dtb_node* node = alloc_node(); 
-    node->name = (const char*)(state.cells + *offset + 1);
+    node->name = (const char*)(state.cells + (*offset) + 1);
     node->addr_cells = addr_cells;
     node->size_cells = size_cells;
 
@@ -252,8 +296,8 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
                 check_for_special_prop(node, prop);
             }
         }
-
-        (*offset)++;
+        else
+            (*offset)++;
     }
 
     if (state.ops.on_error)
@@ -264,12 +308,14 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
 void dtb_init(uintptr_t start, dtb_ops ops)
 {
     state.ops = ops;
+#ifndef SMOLDTB_STATIC_BUFFER_SIZE
     if (!state.ops.malloc)
     {
         if (state.ops.on_error)
             state.ops.on_error("ops.malloc is NULL");
         return;
     }
+#endif
 
     struct fdt_header* header = (struct fdt_header*)start;
     if (be32(header->magic) != FDT_MAGIC)
@@ -283,7 +329,9 @@ void dtb_init(uintptr_t start, dtb_ops ops)
     state.cell_count = be32(header->size_structs) / sizeof(uint32_t);
     state.strings = (const char*)(start + be32(header->offset_strings));
 
-    init_buffers();
+    if (state.node_buff)
+        free_buffers();
+    alloc_buffers();
 
     for (size_t i = 0; i < state.cell_count; i++)
     {
@@ -303,7 +351,7 @@ dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
 
 dtb_node* dtb_find_phandle(unsigned handle)
 {
-    if (handle < DTB_HANDLE_LOOKUP_SIZE)
+    if (handle < state.node_alloc_max)
         return state.handle_lookup[handle];
     return NULL; //TODO: would it be nicer to just search the tree in this case?
 }
@@ -312,19 +360,15 @@ dtb_node* dtb_find(const char* name)
 {
     if (name[0] == '/')
         name++;
+    return state.root;
 
     const size_t name_len = dtb_strlen(name);
     dtb_node* scan = state.root;
     while (scan)
     {
-        if (name[0] == '/')
-        {
-            name++;
-            if (name[0] == 0)
-                break;
-
-        }
     }
+
+    return NULL;
 } 
 
 dtb_node* dtb_find_child(dtb_node* start, const char* name)
@@ -465,9 +509,32 @@ size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* v
     for (size_t i = 0; i < count; i++)
     {
         const uint32_t* base = prop->first_cell + i * stride;
-        vals[i].a = extract_cells(base, layout.a); //TODO: implement me and size-cells
+        vals[i].a = extract_cells(base, layout.a);
         vals[i].b = extract_cells(base + layout.a, layout.b);
         vals[i].c = extract_cells(base + layout.a + layout.b, layout.c);
+    }
+    return count;
+}
+
+//this is getting ridiculous! TODO: abstract this behind a generic function?
+size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
+{
+    if (prop == NULL || layout.a == 0 || layout.b == 0 || layout.c == 0 || layout.d == 0)
+        return 0;
+
+    const struct fdt_property* fdtprop = (const struct fdt_property*)(prop->first_cell - 2);
+    const size_t stride = layout.a + layout.b + layout.c + layout.d;
+    const size_t count = be32(fdtprop->length) / (stride * FDT_CELL_SIZE);
+    if (vals == NULL)
+        return count;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        const uint32_t* base = prop->first_cell + i * stride;
+        vals[i].a = extract_cells(base, layout.a); 
+        vals[i].b = extract_cells(base + layout.a, layout.b);
+        vals[i].c = extract_cells(base + layout.a + layout.b, layout.c);
+        vals[i].d = extract_cells(base + layout.a + layout.b + layout.c, layout.d);
     }
     return count;
 }

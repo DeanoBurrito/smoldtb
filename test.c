@@ -30,7 +30,7 @@ void print_node(dtb_node* node, size_t indent)
     
     dtb_node_stat stat;
     dtb_stat_node(node, &stat);
-    printf("%s %s: %lu siblings, %lu children, %lu properties.", indent_buff, 
+    printf("%s %s: %lu siblings, %lu children, %lu properties.\r\n", indent_buff, 
         stat.name, stat.sibling_count, stat.child_count, stat.prop_count);
 
     dtb_node* child = dtb_get_child(node);

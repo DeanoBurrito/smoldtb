@@ -21,7 +21,16 @@ typedef struct
 
 typedef struct
 {
+    size_t a;
+    size_t b;
+    size_t c;
+    size_t d;
+} dtb_quad;
+
+typedef struct
+{
     void* (*malloc)(size_t length);
+    void (*free)(void* ptr, size_t length);
     void (*on_error)(const char* why);
 } dtb_ops;
 
@@ -50,4 +59,5 @@ const char* dtb_read_string(dtb_prop* prop, size_t index);
 size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, size_t* vals);
 size_t dtb_read_prop_pairs(dtb_prop* prop, dtb_pair layout, dtb_pair* vals);
 size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* vals);
+size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals);
 
