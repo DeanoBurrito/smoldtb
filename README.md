@@ -17,12 +17,12 @@ The arguments for `dtb_init(uintptr_t start, dtb_ops ops)` are as follows:
 - `dtb_ops`: a struct containing a number of function pointers to the library may need to call at runtime. Best practice is to populate all of these.
 
 The `dtb_ops` struct has the following fields:
-- `void* (*malloc)(size_t length)`: This function is called to allocate the buffer used internally by the parser. This is called once per call to dtb_init(). It should return a pointer to a region of memory free for use by the library that is at least `length` bytes in length. This function (and `ops.free()`) are both unused if using a statically allocated buffer.
+- `void* (*malloc)(size_t length)`: This function is called to allocate the buffer used internally by the parser. This is called once per call to `dtb_init()`. It should return a pointer to a region of memory free for use by the library that is at least `length` bytes in length. This function (and `ops.free()`) are both unused if using a statically allocated buffer.
 - `void* (*free)(void* ptr, size_t length)`: Frees a buffer previously allocated by the above function. Only called when reinitializing the parser.
 - `void (*on_error)(const char* why)`: If the library encounters a fatal error and cannot continue it will call this function with a string describing what happened and why.
 
 ### Use Without Malloc/Free
-Define `SMOLDTB_STATIC_BUFFER_SIZE=your_buffer_size` when compiling smoldtb.c and the parser will only allocate from a single buffer, typically stored in the program's `.bss` section. When compiled with this option `ops.free()` and `ops.malloc()` are never called.
+Define `SMOLDTB_STATIC_BUFFER_SIZE=your_buffer_size` when compiling `smoldtb.c` and the parser will only allocate from a single buffer, typically stored in the program's `.bss` section. When compiled with this option `ops.free()` and `ops.malloc()` are never called.
 
 In the event of parsing a DTB that contains too many nodes and/or properties for the static buffer, the parser will exit during `dtb_init()` (with a call to `ops.on_error()` if populated).
 
