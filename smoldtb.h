@@ -48,11 +48,12 @@ dtb_node* dtb_find_compatible(dtb_node* node, const char* str);
 dtb_node* dtb_find_phandle(unsigned handle);
 dtb_node* dtb_find(const char* path);
 dtb_node* dtb_find_child(dtb_node* node, const char* name);
+dtb_prop* dtb_find_prop(dtb_node* node, const char* name);
 
 dtb_node* dtb_get_sibling(dtb_node* node);
 dtb_node* dtb_get_child(dtb_node* node);
 dtb_node* dtb_get_parent(dtb_node* node);
-dtb_prop* dtb_get_prop(dtb_node* node, const char* name);
+dtb_prop* dtb_get_prop(dtb_node* node, size_t index);
 void dtb_stat_node(dtb_node* node, dtb_node_stat* stat);
 
 const char* dtb_read_string(dtb_prop* prop, size_t index);

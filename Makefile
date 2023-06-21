@@ -1,5 +1,5 @@
 C_SRCS = test.c smoldtb.c
-C_FLAGS = -O0 -Wall -Wextra -g
+C_FLAGS = -O0 -Wall -Wextra -g -DSMOLDTB_STATIC_BUFFER_SIZE=0x4000
 TARGET = test.elf
 
 all: $(C_SRCS)

@@ -33,6 +33,18 @@ void print_node(dtb_node* node, size_t indent)
     printf("%s %s: %lu siblings, %lu children, %lu properties.\r\n", indent_buff, 
         stat.name, stat.sibling_count, stat.child_count, stat.prop_count);
 
+    for (size_t i = 0; i < stat.prop_count; i++)
+    {
+        dtb_prop* prop = dtb_get_prop(node, i);
+        if (prop == NULL)
+            break;
+        //NOTE: DO NOT DO THIS! This is a hack for testing purposes for I can make print pretty
+        //trees and check all properties are read correctly. There's a reason these structs are
+        //opaque to calling code, and their underlying definitions can change at any time.
+        const char* name = *(const char**)prop;
+        printf("%s : %s\r\n", indent_buff, name);
+    }
+
     dtb_node* child = dtb_get_child(node);
     while (child != NULL)
     {
@@ -75,6 +87,15 @@ void test_file(const char* filename)
         print_node(root, 0);
         root = dtb_get_sibling(root);
     }
+
+    size_t count = 0;
+    dtb_node* imsics_node = dtb_find_compatible(NULL, "riscv,imsics");
+    while (imsics_node != NULL)
+    {
+        count++;
+        imsics_node = dtb_find_compatible(imsics_node, "riscv,imsics");
+    }
+    printf("Found imsic nodes: %lu (should be 2)\r\n", count);
 
     munmap(buffer, sb.st_size);
     close(fd);

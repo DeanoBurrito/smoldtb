@@ -48,8 +48,9 @@ struct dtb_node_t
 
 struct dtb_prop_t
 {
-    const uint32_t* first_cell;
     const char* name;
+    const uint32_t* first_cell;
+    size_t length;
     dtb_prop* next;
 };
 
@@ -74,7 +75,7 @@ struct dtb_state
 struct dtb_state state;
 
 #ifdef SMOLDTB_STATIC_BUFFER_SIZE
-    uint8_t bigBuff[SMOLDTB_STATIC_BUFFER_SIZE];
+    uint8_t big_buff[SMOLDTB_STATIC_BUFFER_SIZE];
 #endif
 
 static uint32_t be32(uint32_t input)
@@ -164,9 +165,6 @@ static void free_buffers()
 
 static void alloc_buffers()
 {
-#ifdef SMOLDTB_STATIC_BUFFER_SIZE
-    //TODO: implement and test me!
-#else
     state.node_alloc_max = 0;
     state.prop_alloc_max = 0;
     for (size_t i = 0; i < state.cell_count; i++)
@@ -180,8 +178,19 @@ static void alloc_buffers()
     size_t total_size = state.node_alloc_max * sizeof(dtb_node);
     total_size += state.prop_alloc_max * sizeof(dtb_prop);
     total_size += state.node_alloc_max * sizeof(void*); //we assume the worst case and that each node has a phandle prop
-    
+
+#ifdef SMOLDTB_STATIC_BUFFER_SIZE
+    if (total_size >= SMOLDTB_STATIC_BUFFER_SIZE)
+    {
+        if (state.ops.on_error)
+            state.ops.on_error("Too much data for statically allocated buffer.");
+        return;
+    }
+    uint8_t* buffer = big_buff;
+#else
     uint8_t* buffer = state.ops.malloc(total_size);
+#endif
+
     for (size_t i = 0; i < total_size; i++)
         buffer[i] = 0;
 
@@ -190,12 +199,12 @@ static void alloc_buffers()
     state.prop_buff = (dtb_prop*)&state.node_buff[state.node_alloc_max];
     state.prop_alloc_head = 0;
     state.handle_lookup = (dtb_node**)&state.prop_buff[state.prop_alloc_max];
-#endif
 }
 
 static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
 {
-    if (prop->name[0] != '#' && prop->name[0] != 'p' && prop->name[0] != 'l')
+    const char name0 = prop->name[0];
+    if (name0 != '#' || name0 != 'p' || name0 != 'l')
         return;
 
     const size_t name_len = dtb_strlen(prop->name);
@@ -251,6 +260,7 @@ static dtb_prop* parse_prop(size_t* offset)
     const struct fdt_property* fdtprop = (struct fdt_property*)(state.cells + *offset);
     prop->name = (const char*)(state.strings + be32(fdtprop->name_offset));
     prop->first_cell = state.cells + *offset + 2;
+    prop->length = be32(fdtprop->length);
     (*offset) += (dtb_align_up(be32(fdtprop->length), 4) / 4) + 2;
     
     return prop;
@@ -347,7 +357,34 @@ void dtb_init(uintptr_t start, dtb_ops ops)
 }
 
 dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
-{} //TODO: implement me!
+{
+    size_t begin_index = 0;
+    if (start != NULL)
+    {
+        const uintptr_t offset = (uintptr_t)start - (uintptr_t)state.node_buff;
+        begin_index = offset / sizeof(dtb_node);
+        begin_index++; //we want to start searching AFTER this node.
+    }
+
+    for (size_t i = begin_index; i < state.node_alloc_head; i++)
+    {
+        dtb_node* node = &state.node_buff[i];
+        dtb_prop* compat = dtb_find_prop(node, "compatible");
+        if (compat == NULL)
+            continue;
+
+        for (size_t ci = 0; ; ci++)
+        {
+            const char* compat_str = dtb_read_string(compat, ci);
+            if (compat_str == NULL)
+                break;
+            if (strings_eq(compat_str, str))
+                return node;
+        }
+    }
+
+    return NULL;
+} 
 
 dtb_node* dtb_find_phandle(unsigned handle)
 {
@@ -366,13 +403,45 @@ dtb_node* dtb_find(const char* name)
     dtb_node* scan = state.root;
     while (scan)
     {
+        //TODO:
     }
 
     return NULL;
 } 
 
 dtb_node* dtb_find_child(dtb_node* start, const char* name)
-{} //TODO: implement me!
+{
+    if (start == NULL)
+        return NULL;
+
+    dtb_node* scan = start->child;
+    while (scan != NULL)
+    {
+        if (strings_eq(scan->name, name))
+            return scan;
+        scan = scan->sibling;
+    }
+
+    return NULL;
+}
+
+dtb_prop* dtb_find_prop(dtb_node* node, const char* name)
+{
+    if (node == NULL)
+        return NULL;
+
+    const size_t name_len = dtb_strlen(name);
+    dtb_prop* prop = node->props;
+    while (prop)
+    {
+        const size_t prop_name_len = dtb_strlen(prop->name);
+        if (prop_name_len == name_len && strings_eq(prop->name, name))
+            return prop;
+        prop = prop->next;
+    }
+
+    return NULL;
+}
 
 dtb_node* dtb_get_sibling(dtb_node* node)
 {
@@ -395,20 +464,22 @@ dtb_node* dtb_get_parent(dtb_node* node)
     return node->parent;
 }
 
-dtb_prop* dtb_get_prop(dtb_node* node, const char* name)
+
+dtb_prop* dtb_get_prop(dtb_node* node, size_t index)
 {
     if (node == NULL)
         return NULL;
-
-    const size_t name_len = dtb_strlen(name);
+    
     dtb_prop* prop = node->props;
-    while (prop)
+    while (prop != NULL)
     {
-        const size_t prop_name_len = dtb_strlen(prop->name);
-        if (prop_name_len == name_len && strings_eq(prop->name, name))
+        if (index == 0)
             return prop;
+
+        index--;
         prop = prop->next;
     }
+
     return NULL;
 }
 
@@ -455,7 +526,25 @@ static size_t extract_cells(const uint32_t* cells, size_t count)
 }
 
 const char* dtb_read_string(dtb_prop* prop, size_t index)
-{} //TODO: implement me!
+{
+    if (prop == NULL)
+        return NULL;
+    
+    const uint8_t* name = (const uint8_t*)prop->first_cell;
+    size_t curr_index = 0;
+    for (size_t scan = 0; scan < prop->length * 4; scan++)
+    {
+        if (name[scan] == 0)
+        {
+            curr_index++;
+            continue;
+        }
+        if (curr_index == index)
+            return (const char*)&name[scan];
+    }
+
+    return NULL;
+}
 
 size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, size_t* vals)
 {
@@ -516,7 +605,6 @@ size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* v
     return count;
 }
 
-//this is getting ridiculous! TODO: abstract this behind a generic function?
 size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
 {
     if (prop == NULL || layout.a == 0 || layout.b == 0 || layout.c == 0 || layout.d == 0)
