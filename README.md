@@ -27,9 +27,20 @@ Define `SMOLDTB_STATIC_BUFFER_SIZE=your_buffer_size` when compiling `smoldtb.c` 
 In the event of parsing a DTB that contains too many nodes and/or properties for the static buffer, the parser will exit during `dtb_init()` (with a call to `ops.on_error()` if populated).
 
 ### Concurrency
-Not an advertised feature, but all (except `dtb_init()`) API functions will only read the internal structures and DTB. To be safe you may want to use a reader-writer lock around the library (only calls to `dtb_init()` will need the writer lock). If you only plan to initialize the parser once, even this is not necessary.
+Not an advertised feature, but all API functions (except `dtb_init()`) will only read the internal structures and DTB. To be safe you may want to use a reader-writer lock around the library (only calls to `dtb_init()` will need the write lock). If you only plan to initialize the parser once, even this is not necessary.
+
+## Standalone Reader
+This repo also can also build a tool called `readfdt` which takes a flattened device tree file as input, and will print a summary of it's contents. This tool is mainly intended for testing the library part of this project, but it does what it says.
+
+To build it, run `make all` in this project's directory. A C compiler is required.
 
 ## Changelog
+### v1.0.0rc1
+- Renamed testing binary from `test.elf` to `readfdt`.
+- Added some comments in the code.
+- Blew up the number of lines in the code to really test the limits of 'smol'.
+- Properly implemented `dtb_find`.
+
 ### v0.2.0
 - Renamed `dtb_get_prop` to `dtb_find_prop`.
 - Added a new `dtb_get_prop` which returns a property based on an index, rather than name.
@@ -38,3 +49,4 @@ Not an advertised feature, but all (except `dtb_init()`) API functions will only
 
 ### v0.1.0
 - Initial release.
+

@@ -8,6 +8,14 @@
 
 #define FDT_CELL_SIZE 4
 
+/* The 'fdt_*' structs represent data layouts taken directly from the device tree
+ * specification. In contrast the 'dtb_*' structs are for the parser.
+ *
+ * The public API only supports a single (global) active parser, but internally everything
+ * is stored within an instance of the 'dtb_state' struct. This should make it easy
+ * to support multiple parser instances in the future if needed. Or if you're here to
+ * hack that support in, it should hopefully require minimal effort.
+ */
 struct fdt_header
 {
     uint32_t magic;
@@ -34,6 +42,15 @@ struct fdt_property
     uint32_t name_offset;
 };
 
+/* The tree is represented in horizontal slices, where all child nodes are represented
+ * in a singly-linked list. Only a pointer to the first child is stored in the parent, and
+ * the list is build using the node->sibling pointer.
+ * For reference the pointer building the tree are:
+ * - parent: go up one level
+ * - sibling: the next node on this level. To access the previous node, access the parent and then
+ *            the child pointer and iterate to just before the target.
+ * - child: the first child node.
+ */
 struct dtb_node_t
 {
     dtb_node* parent;
@@ -46,6 +63,7 @@ struct dtb_node_t
     uint8_t size_cells;
 };
 
+/* Similar to nodes, properties are stored a singly linked list. */
 struct dtb_prop_t
 {
     const char* name;
@@ -78,6 +96,7 @@ struct dtb_state state;
     uint8_t big_buff[SMOLDTB_STATIC_BUFFER_SIZE];
 #endif
 
+/* Reads a big-endian 32-bit uint into a native uint32 */
 static uint32_t be32(uint32_t input)
 {
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -92,7 +111,8 @@ static uint32_t be32(uint32_t input)
 #endif
 }
 
-static size_t dtb_strlen(const char* str)
+/* Like `strlen`, just an internal version */
+static size_t string_len(const char* str)
 {
     size_t count = 0;
     while (str[count] != 0)
@@ -100,6 +120,7 @@ static size_t dtb_strlen(const char* str)
     return count;
 }
 
+/* Returns non-zero if the contents of two strings match, else zero. */
 static size_t strings_eq(const char* a, const char* b)
 {
     size_t count = 0;
@@ -112,11 +133,54 @@ static size_t strings_eq(const char* a, const char* b)
     return 0;
 }
 
+/* Similar to the above function, but returns success if it reaches the end of the string
+ * OR it reaches the length. 
+ */
+static size_t strings_eq_bounded(const char* a, const char* b, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+    {
+        if (a[i] == 0 && b[i] == 0)
+            return 1;
+        if (a[i] != b[i])
+            return 0;
+    }
+
+    return 1;
+}
+
+/* Finds the first instance of a character within a string, or returns -1ul */
+static size_t string_find_char(const char* str, char target)
+{
+    size_t i = 0;
+    while (str[i] != target)
+    {
+        if (str[i] == 0)
+            return -1ul;
+        i++;
+    }
+    return i;
+}
+
 static size_t dtb_align_up(size_t input, size_t alignment)
 {
     return ((input + alignment - 1) / alignment) * alignment;
 }
 
+/* Allocator design:
+ * The parser allocates a single large buffer from the host kernel, or uses the compile time
+ * statically allocated buffer. It then internally breaks that into 3 other buffers:
+ * - the first is `node_buff` which is used as a bump allocator for node structs. This function
+ *   (`alloc_node()`) uses this buffer to return new pointers.
+ * - the second is `prop_buffer` which is similar, but for property structs instead of nodes.
+ *   The `alloc_prop()` function uses that buffer.
+ * - the last buffer isn't allocated from, but is an array of pointers (one per node). This is
+ *   used for phandle lookup. The phandle is the index, and if the array element is non-null,
+ *   it points to the dtb_node struct representing the associated node. This makes the assumption
+ *   that phandles were allocated in a sane manner (asking a lot of some hardware vendors).
+ *   This buffer is populated when nodes are parsed: if a node has a phandle property, it's
+ *   inserted into the array at the corresponding index to the phandle value.
+ */
 static dtb_node* alloc_node()
 {
     if (state.node_alloc_head + 1 < state.node_alloc_max)
@@ -142,7 +206,6 @@ static void free_buffers()
 #ifdef SMOLDTB_STATIC_BUFFER_SIZE
     state.node_alloc_head = state.node_alloc_max;
     state.prop_alloc_head = state.prop_alloc_max;
-    return;
 #else
     if (state.ops.free == NULL)
     {
@@ -201,15 +264,16 @@ static void alloc_buffers()
     state.handle_lookup = (dtb_node**)&state.prop_buff[state.prop_alloc_max];
 }
 
+/* This runs on every new property found, and handles some special cases for us. */
 static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
 {
     const char name0 = prop->name[0];
     if (name0 != '#' || name0 != 'p' || name0 != 'l')
-        return;
+        return; //short circuit to save processing
 
-    const size_t name_len = dtb_strlen(prop->name);
+    const size_t name_len = string_len(prop->name);
     const char* name_phandle = "phandle";
-    const size_t len_phandle = dtb_strlen(name_phandle);
+    const size_t len_phandle = string_len(name_phandle);
     if (name_len == len_phandle && strings_eq(prop->name, name_phandle))
     {
         size_t handle;
@@ -219,7 +283,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     }
 
     const char* name_linuxhandle = "linux,phandle";
-    const size_t len_linuxhandle = dtb_strlen(name_linuxhandle);
+    const size_t len_linuxhandle = string_len(name_linuxhandle);
     if (name_len == len_linuxhandle && strings_eq(prop->name, name_linuxhandle))
     {
         size_t handle;
@@ -229,7 +293,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     }
 
     const char* name_addrcells = "#address-cells";
-    const size_t len_addrcells = dtb_strlen(name_addrcells);
+    const size_t len_addrcells = string_len(name_addrcells);
     if (name_len == len_addrcells && strings_eq(prop->name, name_addrcells))
     {
         size_t cells;
@@ -239,7 +303,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     }
 
     const char* name_sizecells = "#size-cells";
-    const size_t len_sizecells = dtb_strlen(name_sizecells);
+    const size_t len_sizecells = string_len(name_sizecells);
     if (name_len == len_sizecells && strings_eq(prop->name, name_sizecells))
     {
         size_t cells;
@@ -276,7 +340,7 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
     node->addr_cells = addr_cells;
     node->size_cells = size_cells;
 
-    const size_t name_len = dtb_strlen(node->name);
+    const size_t name_len = string_len(node->name);
     *offset += (dtb_align_up(name_len + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE) + 1;
 
     while (*offset < state.cell_count)
@@ -393,17 +457,41 @@ dtb_node* dtb_find_phandle(unsigned handle)
     return NULL; //TODO: would it be nicer to just search the tree in this case?
 }
 
+static dtb_node* find_child_internal(dtb_node* start, const char* name, size_t name_bounds)
+{
+    dtb_node* scan = start->child;
+    while (scan != NULL)
+    {
+        size_t child_name_len = string_find_char(scan->name, '@');
+        if (child_name_len == -1ul)
+            child_name_len = string_len(scan->name);
+
+        if (child_name_len == name_bounds && strings_eq_bounded(scan->name, name, name_bounds))
+            return scan;
+
+        scan = scan->sibling;
+    }
+
+    return NULL;
+}
+
 dtb_node* dtb_find(const char* name)
 {
-    if (name[0] == '/')
-        name++;
-    return state.root;
-
-    const size_t name_len = dtb_strlen(name);
+    size_t seg_len;
     dtb_node* scan = state.root;
     while (scan)
     {
-        //TODO:
+        while (name[0] == '/')
+            name++;
+
+        seg_len = string_find_char(name, '/');
+        if (seg_len == -1ul)
+            seg_len = string_len(name);
+        if (seg_len == 0)
+            return scan;
+
+        scan = find_child_internal(scan, name, seg_len);
+        name += seg_len;
     }
 
     return NULL;
@@ -414,15 +502,7 @@ dtb_node* dtb_find_child(dtb_node* start, const char* name)
     if (start == NULL)
         return NULL;
 
-    dtb_node* scan = start->child;
-    while (scan != NULL)
-    {
-        if (strings_eq(scan->name, name))
-            return scan;
-        scan = scan->sibling;
-    }
-
-    return NULL;
+    return find_child_internal(start, name, string_len(name));
 }
 
 dtb_prop* dtb_find_prop(dtb_node* node, const char* name)
@@ -430,11 +510,11 @@ dtb_prop* dtb_find_prop(dtb_node* node, const char* name)
     if (node == NULL)
         return NULL;
 
-    const size_t name_len = dtb_strlen(name);
+    const size_t name_len = string_len(name);
     dtb_prop* prop = node->props;
     while (prop)
     {
-        const size_t prop_name_len = dtb_strlen(prop->name);
+        const size_t prop_name_len = string_len(prop->name);
         if (prop_name_len == name_len && strings_eq(prop->name, name))
             return prop;
         prop = prop->next;

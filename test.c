@@ -30,7 +30,7 @@ void print_node(dtb_node* node, size_t indent)
     
     dtb_node_stat stat;
     dtb_stat_node(node, &stat);
-    printf("%s %s: %lu siblings, %lu children, %lu properties.\r\n", indent_buff, 
+    printf("%s[+] %s: %lu siblings, %lu children, %lu properties.\r\n", indent_buff, 
         stat.name, stat.sibling_count, stat.child_count, stat.prop_count);
 
     for (size_t i = 0; i < stat.prop_count; i++)
@@ -42,7 +42,7 @@ void print_node(dtb_node* node, size_t indent)
         //trees and check all properties are read correctly. There's a reason these structs are
         //opaque to calling code, and their underlying definitions can change at any time.
         const char* name = *(const char**)prop;
-        printf("%s : %s\r\n", indent_buff, name);
+        printf("%s  | %s\r\n", indent_buff, name);
     }
 
     dtb_node* child = dtb_get_child(node);
@@ -53,7 +53,7 @@ void print_node(dtb_node* node, size_t indent)
     }
 }
 
-void test_file(const char* filename)
+void display_file(const char* filename)
 {
     int fd = open(filename, O_RDONLY);
     if (fd == -1)
@@ -81,21 +81,12 @@ void test_file(const char* filename)
     ops.on_error = dtb_on_error;
     dtb_init((uintptr_t)buffer, ops);
 
-    dtb_node* root = dtb_find("");
+    dtb_node* root = dtb_find("/");
     while (root != NULL)
     {
         print_node(root, 0);
         root = dtb_get_sibling(root);
     }
-
-    size_t count = 0;
-    dtb_node* imsics_node = dtb_find_compatible(NULL, "riscv,imsics");
-    while (imsics_node != NULL)
-    {
-        count++;
-        imsics_node = dtb_find_compatible(imsics_node, "riscv,imsics");
-    }
-    printf("Found imsic nodes: %lu (should be 2)\r\n", count);
 
     munmap(buffer, sb.st_size);
     close(fd);
@@ -103,10 +94,13 @@ void test_file(const char* filename)
 
 void show_usage()
 {
-    printf("Usage:\r\n");
-    printf("test.elf <filename.dtb>\r\n\r\n");
-    printf("The test program will then dump the contents of the FDT,\r\n");
-    printf("according to smol-dtb has interpreted it.\r\n");
+    printf("Usage: \
+            readfdt <filename.dtb> \
+            \
+            This program will parse a flattened device tree/device tree blob and \
+            output a summary of it's contents. \
+            This programs intended purpose is for testing the smoldtb library code. \
+            \r\n");
 }
 
 int main(int argc, char** argv)
@@ -117,6 +111,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    test_file(argv[1]);
+    display_file(argv[1]);
     return 0;
 }
+

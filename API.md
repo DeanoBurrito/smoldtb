@@ -15,9 +15,9 @@ While the device tree specification (v0.4 at the time of writing) uses big-endia
 
 `dtb_node* dtb_find(const char* path)`: Attempts to find a node based on the path provided. The path is a series of unit names (the trailing address part can be exempt) separated by a forward slash `/`, similar to a unix filepath. Returns `NULL` if the node couldn't be located. Properties cannot be looked up this way, you must look up the node and then use `dtb_get_prop()`.
 
-`dtb_prop* dtb_find_prop(dtb_node* node, const char* name)`: Returns a property of this node with the matching name, or `NULL` if a property isn't found.
-
 `dtb_node* dtb_find_child(dtb_node* node, const char* name)`: Attempts to find a child of a node with a matching unit name (unit address is exempt from the string comparison). Returns `NULL` if no matching child is present.
+
+`dtb_prop* dtb_find_prop(dtb_node* node, const char* name)`: Returns a property of this node with the matching name, or `NULL` if a property isn't found.
 
 ## Get functions
 
