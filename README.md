@@ -1,7 +1,7 @@
 # A Tiny Flattened Device Tree Parser
 Available [Codeberg](https://codeberg.org/r4/smoldtb) and [Github](https://github.com/deanoburrito/smoldtb).
 
-This project is a standalone C port of the device parser from my kernel [Northport](https://github.com/deanoburrito/northport). The original version has few limitations which are addressed here. 
+This project is a standalone C port of the device tree parser from my kernel [Northport](https://github.com/deanoburrito/northport). The original version has few limitations which are addressed here. 
 
 This version does make use of a single larger buffer for storing node data. This can either be allocated by a user provided function, or from a statically allocated buffer inside the program executable. The second method is suitable for environments where dynamic memory allocation might not be available, but it does limit the maximum number of nodes the parser can process.
 
