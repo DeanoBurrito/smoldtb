@@ -570,7 +570,7 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
         return;
 
     if (node == state.root) {
-            stat->name = ROOT_NODE_STR;
+        stat->name = ROOT_NODE_STR;
     } else {
         stat->name = node->name;
     }
