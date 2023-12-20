@@ -7,6 +7,7 @@
 #define FDT_NOP 4
 
 #define FDT_CELL_SIZE 4
+#define ROOT_NODE_STR "/"
 
 /* The 'fdt_*' structs represent data layouts taken directly from the device tree
  * specification. In contrast the 'dtb_*' structs are for the parser.
@@ -568,7 +569,12 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
     if (node == NULL)
         return;
 
-    stat->name = node->name;
+    if (node == state.root) {
+            stat->name = ROOT_NODE_STR;
+    } else {
+        stat->name = node->name;
+    }
+
     stat->prop_count = 0;
     dtb_prop* prop = node->props;
     while (prop != NULL)
