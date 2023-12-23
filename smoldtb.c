@@ -569,11 +569,7 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
     if (node == NULL)
         return;
 
-    if (node == state.root) {
-        stat->name = ROOT_NODE_STR;
-    } else {
-        stat->name = node->name;
-    }
+    stat->name = ( node == state.root ) ? ROOT_NODE_STR : node->name;
 
     stat->prop_count = 0;
     dtb_prop* prop = node->props;
