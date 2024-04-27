@@ -359,6 +359,7 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
             {
                 child->sibling = node->child;
                 node->child = child;
+                child->parent = node;
             }
         }
         else if (test == FDT_PROP)
