@@ -9,6 +9,8 @@
 #define FDT_CELL_SIZE 4
 #define ROOT_NODE_STR "/"
 
+#define LOG_ERROR(msg)
+
 /* The 'fdt_*' structs represent data layouts taken directly from the device tree
  * specification. In contrast the 'dtb_*' structs are for the parser.
  *
@@ -119,19 +121,6 @@ static size_t string_len(const char* str)
     while (str[count] != 0)
         count++;
     return count;
-}
-
-/* Returns non-zero if the contents of two strings match, else zero. */
-static size_t strings_eq(const char* a, const char* b)
-{
-    size_t count = 0;
-    while (a[count] == b[count])
-    {
-        if (a[count] == 0)
-            return 1;
-        count++;
-    }
-    return 0;
 }
 
 /* Similar to the above function, but returns success if it reaches the end of the string
@@ -273,9 +262,10 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
         return; //short circuit to save processing
 
     const size_t name_len = string_len(prop->name);
-    const char* name_phandle = "phandle";
-    const size_t len_phandle = string_len(name_phandle);
-    if (name_len == len_phandle && strings_eq(prop->name, name_phandle))
+
+    const char str_phandle[] = "phandle";
+    const size_t len_phandle = sizeof(str_phandle) - 1;
+    if (name_len == len_phandle && strings_eq_bounded(prop->name, str_phandle, name_len))
     {
         size_t handle;
         dtb_read_prop_values(prop, 1, &handle);
@@ -283,9 +273,9 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
         return;
     }
 
-    const char* name_linuxhandle = "linux,phandle";
-    const size_t len_linuxhandle = string_len(name_linuxhandle);
-    if (name_len == len_linuxhandle && strings_eq(prop->name, name_linuxhandle))
+    const char str_lhandle[] = "linux,phandle";
+    const size_t len_lhandle = sizeof(str_lhandle) - 1;
+    if (name_len == len_lhandle && strings_eq_bounded(prop->name, str_lhandle, name_len))
     {
         size_t handle;
         dtb_read_prop_values(prop, 1, &handle);
@@ -293,9 +283,9 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
         return;
     }
 
-    const char* name_addrcells = "#address-cells";
-    const size_t len_addrcells = string_len(name_addrcells);
-    if (name_len == len_addrcells && strings_eq(prop->name, name_addrcells))
+    const char str_addrcells[] = "#address-cells";
+    const size_t len_addrcells = sizeof(str_addrcells) - 1;
+    if (name_len == len_addrcells && strings_eq_bounded(prop->name, str_addrcells, name_len))
     {
         size_t cells;
         dtb_read_prop_values(prop, 1, &cells);
@@ -303,9 +293,9 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
         return;
     }
 
-    const char* name_sizecells = "#size-cells";
-    const size_t len_sizecells = string_len(name_sizecells);
-    if (name_len == len_sizecells && strings_eq(prop->name, name_sizecells))
+    const char str_sizecells[] = "#size-cells";
+    const size_t len_sizecells = sizeof(str_sizecells) - 1;
+    if (name_len == len_sizecells && strings_eq_bounded(prop->name, str_sizecells, name_len))
     {
         size_t cells;
         dtb_read_prop_values(prop, 1, &cells);
@@ -355,50 +345,64 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
         else if (test == FDT_BEGIN_NODE)
         {
             dtb_node* child = parse_node(offset, addr_cells, size_cells);
-            if (child)
-            {
-                child->sibling = node->child;
-                node->child = child;
-                child->parent = node;
-            }
+            if (child == NULL)
+                continue;
+
+            child->sibling = node->child;
+            node->child = child;
+            child->parent = node;
         }
         else if (test == FDT_PROP)
         {
             dtb_prop* prop = parse_prop(offset);
-            if (prop)
-            {
-                prop->next = node->props;
-                node->props = prop;
-                check_for_special_prop(node, prop);
-            }
-        }
+            if (prop == NULL)
+                continue;
+
+            prop->next = node->props;
+            node->props = prop;
+            check_for_special_prop(node, prop);
+    }
         else
             (*offset)++;
     }
 
-    if (state.ops.on_error)
-        state.ops.on_error("Node has no terminating tag.");
+    LOG_ERROR("Node is missing terminating tag.");
     return NULL;
 }
 
-void dtb_init(uintptr_t start, dtb_ops ops)
+size_t dtb_query_total_size(uintptr_t fdt_start)
+{
+    struct fdt_header* header = (struct fdt_header*)fdt_start;
+
+    return be32(header->total_size);
+}
+
+bool dtb_init_with_config(uintptr_t start, dtb_ops ops, dtb_config* config)
 {
     state.ops = ops;
+
+    if (config == NULL)
+    {
+        LOG_ERROR("Config argument cannot be null");
+        return false;
+    }
+
+    if (config->config_ver < 1)
+        config->writable = false;
+
 #ifndef SMOLDTB_STATIC_BUFFER_SIZE
     if (!state.ops.malloc)
     {
-        if (state.ops.on_error)
-            state.ops.on_error("ops.malloc is NULL");
-        return;
+        LOG_ERROR("ops.malloc() is NULL");
+        return false;
     }
 #endif
 
     struct fdt_header* header = (struct fdt_header*)start;
     if (be32(header->magic) != FDT_MAGIC)
     {
-        if (state.ops.on_error)
-            state.ops.on_error("FDT has incorrect magic number.");
-        return;
+        LOG_ERROR("FDT has incorrect magic number.");
+        return false;
     }
 
     state.cells = (const uint32_t*)(start + be32(header->offset_structs));
@@ -420,6 +424,16 @@ void dtb_init(uintptr_t start, dtb_ops ops)
         sub_root->sibling = state.root;
         state.root = sub_root;
     }
+
+    return true;
+}
+
+bool dtb_init(uintptr_t start, dtb_ops ops)
+{
+    dtb_config dummy_conf;
+    dummy_conf.config_ver = 0;
+
+    return dtb_init_with_config(start, ops, &dummy_conf);
 }
 
 dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
@@ -432,6 +446,7 @@ dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
         begin_index++; //we want to start searching AFTER this node.
     }
 
+    const size_t compatstr_len = string_len(str);
     for (size_t i = begin_index; i < state.node_alloc_head; i++)
     {
         dtb_node* node = &state.node_buff[i];
@@ -441,10 +456,11 @@ dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
 
         for (size_t ci = 0; ; ci++)
         {
-            const char* compat_str = dtb_read_string(compat, ci);
+            const char* compat_str = dtb_read_prop_string(compat, ci);
             if (compat_str == NULL)
                 break;
-            if (strings_eq(compat_str, str))
+
+            if (strings_eq_bounded(compat_str, str, compatstr_len))
                 return node;
         }
     }
@@ -456,7 +472,9 @@ dtb_node* dtb_find_phandle(unsigned handle)
 {
     if (handle < state.node_alloc_max)
         return state.handle_lookup[handle];
-    return NULL; //TODO: would it be nicer to just search the tree in this case?
+
+    //TODO: we should fallback on a linear search in this case.
+    return NULL;
 }
 
 static dtb_node* find_child_internal(dtb_node* start, const char* name, size_t name_bounds)
@@ -517,7 +535,7 @@ dtb_prop* dtb_find_prop(dtb_node* node, const char* name)
     while (prop)
     {
         const size_t prop_name_len = string_len(prop->name);
-        if (prop_name_len == name_len && strings_eq(prop->name, name))
+        if (prop_name_len == name_len && strings_eq_bounded(prop->name, name, prop_name_len))
             return prop;
         prop = prop->next;
     }
@@ -570,7 +588,9 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
     if (node == NULL)
         return;
 
-    stat->name = ( node == state.root ) ? ROOT_NODE_STR : node->name;
+    stat->name = node->name;
+    if (node == state.root)
+        stat->name = ROOT_NODE_STR;
 
     stat->prop_count = 0;
     dtb_prop* prop = node->props;
@@ -600,15 +620,15 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
     }
 }
 
-static size_t extract_cells(const uint32_t* cells, size_t count)
+static uintmax_t extract_cells(const uint32_t* cells, size_t count)
 {
-    size_t value = 0;
+    uintmax_t value = 0;
     for (size_t i = 0; i < count; i++)
-        value |= (size_t)be32(cells[i]) << ((count - 1 - i) * 32);
+        value |= (uintmax_t)be32(cells[i]) << ((count - 1 - i) * 32);
     return value;
 }
 
-const char* dtb_read_string(dtb_prop* prop, size_t index)
+const char* dtb_read_prop_string(dtb_prop* prop, size_t index)
 {
     if (prop == NULL)
         return NULL;
@@ -710,3 +730,6 @@ size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
     return count;
 }
 
+#ifndef SMOLDTB_ENABLE_WRITE_API
+//TODO: write api
+#endif

@@ -2,9 +2,20 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct dtb_node_t dtb_node;
 typedef struct dtb_prop_t dtb_prop;
+
+typedef struct
+{
+    size_t config_ver;
+    bool writable;
+} dtb_config;
 
 typedef struct
 {
@@ -42,7 +53,13 @@ typedef struct
     size_t sibling_count;
 } dtb_node_stat;
 
-void dtb_init(uintptr_t start, dtb_ops ops);
+/* Gets the total number of bytes occupied by an existing fdt, as self-reported
+ * in it's header. This function is self contained and can be called before dtb_init().
+ */
+size_t dtb_query_total_size(uintptr_t fdt_start);
+
+bool dtb_init_with_config(uintptr_t start, dtb_ops ops, dtb_config* config);
+bool dtb_init(uintptr_t start, dtb_ops ops);
 
 dtb_node* dtb_find_compatible(dtb_node* node, const char* str);
 dtb_node* dtb_find_phandle(unsigned handle);
@@ -56,9 +73,22 @@ dtb_node* dtb_get_parent(dtb_node* node);
 dtb_prop* dtb_get_prop(dtb_node* node, size_t index);
 void dtb_stat_node(dtb_node* node, dtb_node_stat* stat);
 
-const char* dtb_read_string(dtb_prop* prop, size_t index);
+const char* dtb_read_prop_string(dtb_prop* prop, size_t index);
 size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, size_t* vals);
 size_t dtb_read_prop_pairs(dtb_prop* prop, dtb_pair layout, dtb_pair* vals);
 size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* vals);
 size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals);
 
+#ifndef SMOLDTB_ENABLE_WRITE_API
+size_t dtb_finalised_buffer_size();
+bool dtb_finalise_to_buffer(void* buffer, size_t buffer_size);
+
+dtb_node* dtb_find_or_create_node(const char* path);
+dtb_node* dtb_create_sibling(dtb_node* node, const char* name);
+dtb_node* dtb_create_child(dtb_node* node, const char* name);
+dtb_node* dtb_create_prop(dtb_node* node, const char* name);
+#endif
+
+#ifdef __cplusplus
+}
+#endif
