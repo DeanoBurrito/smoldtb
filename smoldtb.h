@@ -71,7 +71,7 @@ dtb_node* dtb_get_sibling(dtb_node* node);
 dtb_node* dtb_get_child(dtb_node* node);
 dtb_node* dtb_get_parent(dtb_node* node);
 dtb_prop* dtb_get_prop(dtb_node* node, size_t index);
-void dtb_stat_node(dtb_node* node, dtb_node_stat* stat);
+bool dtb_stat_node(dtb_node* node, dtb_node_stat* stat);
 
 const char* dtb_read_prop_string(dtb_prop* prop, size_t index);
 size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, size_t* vals);
@@ -80,13 +80,21 @@ size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* v
 size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals);
 
 #ifndef SMOLDTB_ENABLE_WRITE_API
-size_t dtb_finalised_buffer_size();
-bool dtb_finalise_to_buffer(void* buffer, size_t buffer_size);
+size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size);
 
 dtb_node* dtb_find_or_create_node(const char* path);
 dtb_node* dtb_create_sibling(dtb_node* node, const char* name);
 dtb_node* dtb_create_child(dtb_node* node, const char* name);
-dtb_node* dtb_create_prop(dtb_node* node, const char* name);
+dtb_prop* dtb_create_prop(dtb_node* node, const char* name);
+
+bool dtb_destroy_node(dtb_node* node);
+bool dtb_destroy_prop(dtb_node* node, dtb_prop* prop);
+
+bool dtb_write_prop_string(dtb_prop* prop, const char* str, size_t str_len);
+bool dtb_write_prop_values(dtb_prop* prop, size_t count, size_t cell_count, const uintmax_t* vals);
+bool dtb_write_prop_pairs(dtb_prop* prop, size_t count, dtb_pair layout, const dtb_pair* vals);
+bool dtb_write_prop_triplets(dtb_prop* prop, size_t count, dtb_triplet layout, const dtb_triplet* vals);
+bool dtb_write_prop_quads(dtb_prop* prop, size_t count, dtb_quad layout, const dtb_quad* vals);
 #endif
 
 #ifdef __cplusplus

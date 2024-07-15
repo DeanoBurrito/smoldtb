@@ -9,7 +9,11 @@
 #define FDT_CELL_SIZE 4
 #define ROOT_NODE_STR "/"
 
-#define LOG_ERROR(msg)
+#ifndef SMOLDTB_NO_LOGGING
+    #define LOG_ERROR(msg) do { if (state.ops.on_error != NULL) { state.ops.on_error(msg); }} while(false)
+#else
+    #define LOG_ERROR(msg)
+#endif
 
 /* The 'fdt_*' structs represent data layouts taken directly from the device tree
  * specification. In contrast the 'dtb_*' structs are for the parser.
@@ -60,10 +64,7 @@ struct dtb_node_t
     dtb_node* sibling;
     dtb_node* child;
     dtb_prop* props;
-
     const char* name;
-    uint8_t addr_cells;
-    uint8_t size_cells;
 };
 
 /* Similar to nodes, properties are stored a singly linked list. */
@@ -99,7 +100,7 @@ struct dtb_state state;
     uint8_t big_buff[SMOLDTB_STATIC_BUFFER_SIZE];
 #endif
 
-/* Reads a big-endian 32-bit uint into a native uint32 */
+/* Converts between host and explicitly big-endian u32s */
 static uint32_t be32(uint32_t input)
 {
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -114,6 +115,7 @@ static uint32_t be32(uint32_t input)
 #endif
 }
 
+//TODO: allow user to override utility functions a-la uacpi
 /* Like `strlen`, just an internal version */
 static size_t string_len(const char* str)
 {
@@ -123,20 +125,31 @@ static size_t string_len(const char* str)
     return count;
 }
 
+static void* memcpy(void* dest, const void* src, size_t count)
+{
+    uint8_t* d = (uint8_t*)dest;
+    const uint8_t* s = src;
+
+    for (size_t i = 0; i < count; i++)
+        d[i] = s[i];
+
+    return dest;
+}
+
 /* Similar to the above function, but returns success if it reaches the end of the string
  * OR it reaches the length. 
  */
-static size_t strings_eq_bounded(const char* a, const char* b, size_t len)
+static bool strings_eq(const char* a, const char* b, size_t len)
 {
     for (size_t i = 0; i < len; i++)
     {
         if (a[i] == 0 && b[i] == 0)
-            return 1;
+            return true;
         if (a[i] != b[i])
-            return 0;
+            return false;
     }
 
-    return 1;
+    return true;
 }
 
 /* Finds the first instance of a character within a string, or returns -1ul */
@@ -178,7 +191,7 @@ static dtb_node* alloc_node()
 
     if (state.ops.on_error)
         state.ops.on_error("Node allocator ran out of space");
-    return NULL;
+    return NULL; //TODO: redo these functions with writable api in mind
 }
 
 static dtb_prop* alloc_prop()
@@ -265,7 +278,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
 
     const char str_phandle[] = "phandle";
     const size_t len_phandle = sizeof(str_phandle) - 1;
-    if (name_len == len_phandle && strings_eq_bounded(prop->name, str_phandle, name_len))
+    if (name_len == len_phandle && strings_eq(prop->name, str_phandle, name_len))
     {
         size_t handle;
         dtb_read_prop_values(prop, 1, &handle);
@@ -275,31 +288,11 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
 
     const char str_lhandle[] = "linux,phandle";
     const size_t len_lhandle = sizeof(str_lhandle) - 1;
-    if (name_len == len_lhandle && strings_eq_bounded(prop->name, str_lhandle, name_len))
+    if (name_len == len_lhandle && strings_eq(prop->name, str_lhandle, name_len))
     {
         size_t handle;
         dtb_read_prop_values(prop, 1, &handle);
         state.handle_lookup[handle] = node;
-        return;
-    }
-
-    const char str_addrcells[] = "#address-cells";
-    const size_t len_addrcells = sizeof(str_addrcells) - 1;
-    if (name_len == len_addrcells && strings_eq_bounded(prop->name, str_addrcells, name_len))
-    {
-        size_t cells;
-        dtb_read_prop_values(prop, 1, &cells);
-        node->addr_cells = cells;
-        return;
-    }
-
-    const char str_sizecells[] = "#size-cells";
-    const size_t len_sizecells = sizeof(str_sizecells) - 1;
-    if (name_len == len_sizecells && strings_eq_bounded(prop->name, str_sizecells, name_len))
-    {
-        size_t cells;
-        dtb_read_prop_values(prop, 1, &cells);
-        node->size_cells = cells;
         return;
     }
 }
@@ -321,15 +314,13 @@ static dtb_prop* parse_prop(size_t* offset)
     return prop;
 }
 
-static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cells)
+static dtb_node* parse_node(size_t* offset)
 {
     if (be32(state.cells[*offset]) != FDT_BEGIN_NODE)
         return NULL;
 
     dtb_node* node = alloc_node(); 
     node->name = (const char*)(state.cells + (*offset) + 1);
-    node->addr_cells = addr_cells;
-    node->size_cells = size_cells;
 
     const size_t name_len = string_len(node->name);
     *offset += (dtb_align_up(name_len + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE) + 1;
@@ -344,7 +335,7 @@ static dtb_node* parse_node(size_t* offset, uint8_t addr_cells, uint8_t size_cel
         }
         else if (test == FDT_BEGIN_NODE)
         {
-            dtb_node* child = parse_node(offset, addr_cells, size_cells);
+            dtb_node* child = parse_node(offset);
             if (child == NULL)
                 continue;
 
@@ -377,6 +368,13 @@ size_t dtb_query_total_size(uintptr_t fdt_start)
     return be32(header->total_size);
 }
 
+/* Apply sane values to any config values not in config version reported by host */
+static void sanitise_config(dtb_config* config)
+{
+    if (config->config_ver < 1)
+        config->writable = false;
+}
+
 bool dtb_init_with_config(uintptr_t start, dtb_ops ops, dtb_config* config)
 {
     state.ops = ops;
@@ -386,9 +384,7 @@ bool dtb_init_with_config(uintptr_t start, dtb_ops ops, dtb_config* config)
         LOG_ERROR("Config argument cannot be null");
         return false;
     }
-
-    if (config->config_ver < 1)
-        config->writable = false;
+    sanitise_config(config);
 
 #ifndef SMOLDTB_STATIC_BUFFER_SIZE
     if (!state.ops.malloc)
@@ -418,7 +414,7 @@ bool dtb_init_with_config(uintptr_t start, dtb_ops ops, dtb_config* config)
         if (be32(state.cells[i]) != FDT_BEGIN_NODE)
             continue;
 
-        dtb_node* sub_root = parse_node(&i, 2, 1);
+        dtb_node* sub_root = parse_node(&i);
         if (sub_root == NULL)
             continue;
         sub_root->sibling = state.root;
@@ -460,7 +456,7 @@ dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
             if (compat_str == NULL)
                 break;
 
-            if (strings_eq_bounded(compat_str, str, compatstr_len))
+            if (strings_eq(compat_str, str, compatstr_len))
                 return node;
         }
     }
@@ -486,7 +482,7 @@ static dtb_node* find_child_internal(dtb_node* start, const char* name, size_t n
         if (child_name_len == -1ul)
             child_name_len = string_len(scan->name);
 
-        if (child_name_len == name_bounds && strings_eq_bounded(scan->name, name, name_bounds))
+        if (child_name_len == name_bounds && strings_eq(scan->name, name, name_bounds))
             return scan;
 
         scan = scan->sibling;
@@ -535,7 +531,7 @@ dtb_prop* dtb_find_prop(dtb_node* node, const char* name)
     while (prop)
     {
         const size_t prop_name_len = string_len(prop->name);
-        if (prop_name_len == name_len && strings_eq_bounded(prop->name, name, prop_name_len))
+        if (prop_name_len == name_len && strings_eq(prop->name, name, prop_name_len))
             return prop;
         prop = prop->next;
     }
@@ -583,10 +579,10 @@ dtb_prop* dtb_get_prop(dtb_node* node, size_t index)
     return NULL;
 }
 
-void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
+bool dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
 {
     if (node == NULL)
-        return;
+        return false;
 
     stat->name = node->name;
     if (node == state.root)
@@ -618,6 +614,8 @@ void dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
             stat->sibling_count++;
         }
     }
+
+    return true;
 }
 
 static uintmax_t extract_cells(const uint32_t* cells, size_t count)
@@ -731,5 +729,143 @@ size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
 }
 
 #ifndef SMOLDTB_ENABLE_WRITE_API
-//TODO: write api
+size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size)
+{}
+
+dtb_node* dtb_find_or_create_node(const char* path)
+{}
+
+dtb_node* dtb_create_sibling(dtb_node* node, const char* name)
+{
+    if (node == NULL)
+    {
+        LOG_ERROR("Cannot create sibling of NULL node.");
+        return NULL;
+    }
+    
+    if (name == NULL)
+    {
+        LOG_ERROR("Sibling cannot have empty name.");
+        return NULL;
+    }
+    const size_t name_len = string_len(name);
+
+    for (dtb_node* scan = node; scan != NULL; scan = scan->sibling)
+    {
+        if (!strings_eq(scan->name, name, name_len))
+            continue;
+        LOG_ERROR("Node name already in use.");
+        return NULL;
+    }
+
+    char* name_buf = state.ops.malloc(name_len + 1);
+    memcpy(name_buf, name, name_len);
+
+    dtb_node* sibling = alloc_node();
+    if (sibling == NULL)
+    {
+        LOG_ERROR("Failed to allocate node for sibling.");
+        return NULL;
+    }
+
+    sibling->name = name_buf;
+    sibling->parent = node->parent;
+    sibling->sibling = node->sibling;
+    node->sibling = sibling;
+    return sibling;
+}
+
+dtb_node* dtb_create_child(dtb_node* node, const char* name)
+{
+    if (node == NULL)
+    {
+        LOG_ERROR("Cannot create child of NULL node.");
+        return NULL;
+    }
+    
+    if (name == NULL)
+    {
+        LOG_ERROR("Child cannot have empty name.");
+        return NULL;
+    }
+    const size_t name_len = string_len(name);
+
+    for (dtb_node* scan = node->child; scan != NULL; scan = scan->sibling)
+    {
+        if (!strings_eq(scan->name, name, name_len))
+            continue;
+        LOG_ERROR("Node name already in use.");
+        return NULL;
+    }
+
+    char* name_buf = state.ops.malloc(name_len + 1);
+    memcpy(name_buf, name, name_len);
+
+    dtb_node* child = alloc_node();
+    if (child == NULL)
+    {
+        LOG_ERROR("Failed to allocate node for child.");
+        return NULL;
+    }
+
+    child->parent = node;
+    child->name = name_buf;
+    child->sibling = node->child;
+    node->child = child;
+    return child;
+}
+
+dtb_prop* dtb_create_prop(dtb_node* node, const char* name)
+{
+    if (node == NULL)
+    {
+        LOG_ERROR("Cannot create property of NULL node.");
+        return NULL;
+    }
+
+    if (name == NULL)
+    {
+        LOG_ERROR("Property cannot have NULL name.");
+        return NULL;
+    }
+
+    const size_t name_len = string_len(name);
+    char* name_buf = state.ops.malloc(name_len + 1);
+    memcpy(name_buf, name, name_len);
+
+    dtb_prop* prop = alloc_prop();
+    if (prop == NULL)
+    {
+        LOG_ERROR("Failed to allocate property");
+        return NULL;
+    }
+
+    prop->length = 0;
+    prop->first_cell = NULL;
+    prop->name = name_buf;
+    prop->next = node->props;
+    node->props = prop;
+    return prop;
+}
+
+bool dtb_destroy_node(dtb_node* node)
+{}
+
+bool dtb_destroy_prop(dtb_node* node, dtb_prop* prop)
+{}
+
+bool dtb_write_prop_string(dtb_prop* prop, const char* str, size_t str_len)
+{}
+
+bool dtb_write_prop_values(dtb_prop* prop, size_t count, size_t cell_count, const uintmax_t* vals)
+{}
+
+bool dtb_write_prop_pairs(dtb_prop* prop, size_t count, dtb_pair layout, const dtb_pair* vals)
+{}
+
+bool dtb_write_prop_triplets(dtb_prop* prop, size_t count, dtb_triplet layout, const dtb_triplet* vals)
+{}
+
+bool dtb_write_prop_quads(dtb_prop* prop, size_t count, dtb_quad layout, const dtb_quad* vals)
+{}
 #endif
