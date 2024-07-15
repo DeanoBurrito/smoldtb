@@ -6,8 +6,12 @@
 #define FDT_PROP 3
 #define FDT_NOP 4
 
+#define FDT_VERSION 17
 #define FDT_CELL_SIZE 4
 #define ROOT_NODE_STR "/"
+
+#define SMOLDTB_FOREACH_CONTINUE 0
+#define SMOLDTB_FOREACH_ABORT 1
 
 #ifndef SMOLDTB_NO_LOGGING
     #define LOG_ERROR(msg) do { if (state.ops.on_error != NULL) { state.ops.on_error(msg); }} while(false)
@@ -119,6 +123,9 @@ static uint32_t be32(uint32_t input)
 /* Like `strlen`, just an internal version */
 static size_t string_len(const char* str)
 {
+    if (str == NULL)
+        return 0;
+
     size_t count = 0;
     while (str[count] != 0)
         count++;
@@ -168,6 +175,36 @@ static size_t string_find_char(const char* str, char target)
 static size_t dtb_align_up(size_t input, size_t alignment)
 {
     return ((input + alignment - 1) / alignment) * alignment;
+}
+
+static void do_foreach_sibling(dtb_node* begin, int (*action)(dtb_node* node, void* opaque), void* opaque)
+{
+    if (begin == NULL)
+        return;
+    if (action == NULL)
+        return;
+
+    for (dtb_node* node = begin; node != NULL; node = node->sibling)
+    {
+        if (action(node, opaque) == SMOLDTB_FOREACH_ABORT)
+            return;
+    }
+}
+
+static void do_foreach_prop(dtb_node* node, int (*action)(dtb_node* node, dtb_prop* prop, void* opaque), void* opaque)
+{
+    if (node == NULL)
+        return;
+    if (node->props == NULL)
+        return;
+    if (action == NULL)
+        return;
+
+    for (dtb_prop* prop = node->props; prop != NULL; prop = prop->next)
+    {
+        if (action(node, prop, opaque) == SMOLDTB_FOREACH_ABORT)
+            return;
+    }
 }
 
 /* Allocator design:
@@ -304,6 +341,11 @@ static dtb_prop* parse_prop(size_t* offset)
 
     (*offset)++;
     dtb_prop* prop = alloc_prop();
+    if (prop == NULL)
+    {
+        LOG_ERROR("Property allocation failed");
+        return NULL;
+    }
 
     const struct fdt_property* fdtprop = (struct fdt_property*)(state.cells + *offset);
     prop->name = (const char*)(state.strings + be32(fdtprop->name_offset));
@@ -320,9 +362,16 @@ static dtb_node* parse_node(size_t* offset)
         return NULL;
 
     dtb_node* node = alloc_node(); 
+    if (node == NULL)
+    {
+        LOG_ERROR("Node allocation failed");
+        return NULL;
+    }
     node->name = (const char*)(state.cells + (*offset) + 1);
 
     const size_t name_len = string_len(node->name);
+    if (name_len == 0)
+        node->name = NULL;
     *offset += (dtb_align_up(name_len + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE) + 1;
 
     while (*offset < state.cell_count)
@@ -729,8 +778,163 @@ size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
 }
 
 #ifndef SMOLDTB_ENABLE_WRITE_API
-size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size)
-{}
+struct finalise_data
+{
+    uint32_t* struct_buf;
+    char* string_buf;
+    size_t struct_ptr;
+    size_t string_ptr;
+    size_t struct_buf_size;
+    size_t string_buf_size;
+    bool print_success;
+};
+
+static int init_finalise_data_prop(dtb_node* node, dtb_prop* prop, void* opaque)
+{
+    (void)node;
+    if (node == NULL || prop == NULL)
+        return SMOLDTB_FOREACH_CONTINUE;
+
+    struct finalise_data* data = (struct finalise_data*)opaque;
+    data->struct_buf_size += 3; /* +1 for FDT_PROP token, +2 for prop description struct */
+    data->struct_buf_size += dtb_align_up(prop->length, FDT_CELL_SIZE) / FDT_CELL_SIZE;
+    data->string_buf_size += string_len(prop->name) + 1; /* +1 for null terminator */
+
+    return SMOLDTB_FOREACH_CONTINUE;
+}
+
+static int init_finalise_data(dtb_node* node, void* opaque)
+{
+    if (node == NULL)
+        return SMOLDTB_FOREACH_CONTINUE;
+
+    struct finalise_data* data = (struct finalise_data*)opaque;
+    data->struct_buf_size += 2; /* +1 for BEGIN_NODE token, +1 for END_NODE token */
+    data->struct_buf_size += dtb_align_up(string_len(node->name) + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE; /* +1 for null terminator */
+
+    do_foreach_prop(node, init_finalise_data_prop, opaque);
+    do_foreach_sibling(node->child, init_finalise_data, opaque);
+
+    return SMOLDTB_FOREACH_CONTINUE;
+}
+
+static int print_prop(dtb_node* node, dtb_prop* prop, void* opaque)
+{
+    (void)node;
+    struct finalise_data* data = (struct finalise_data*)opaque;
+
+    const uint32_t name_offset = data->string_ptr;
+    const size_t name_len = string_len(prop->name);
+    if (data->string_ptr + name_len + 1 > data->string_buf_size) /* bounds check */
+    {
+        data->print_success = false;
+        return SMOLDTB_FOREACH_ABORT;
+    }
+
+    memcpy(data->string_buf + data->string_ptr, prop->name, name_len);
+    data->string_buf[data->string_ptr + name_len] = 0;
+    data->string_ptr += name_len + 1; /* +1 for null terminator */
+
+    const size_t data_cells = dtb_align_up(prop->length, FDT_CELL_SIZE) / FDT_CELL_SIZE;
+    if (data->struct_ptr + 3 + data_cells > data->struct_buf_size) /* bounds check */
+    {
+        data->print_success = false;
+        return SMOLDTB_FOREACH_ABORT;
+    }
+
+    data->struct_buf[data->struct_ptr++] = be32(FDT_PROP);
+    data->struct_buf[data->struct_ptr++] = be32((uint32_t)prop->length);
+    data->struct_buf[data->struct_ptr++] = be32(name_offset);
+    for (size_t i = 0; i < data_cells; i++)
+        data->struct_buf[data->struct_ptr++] = prop->first_cell[i];
+
+    return SMOLDTB_FOREACH_CONTINUE;
+}
+
+static int print_node(dtb_node* node, void* opaque)
+{
+    struct finalise_data* data = (struct finalise_data*)opaque;
+    const size_t name_len = string_len(node->name);
+    const size_t name_cells = dtb_align_up(name_len + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE;
+
+    if (data->struct_ptr + 1 + name_cells > data->struct_buf_size) /* bounds check */
+    {
+        data->print_success = false;
+        return SMOLDTB_FOREACH_ABORT;
+    }
+
+    data->struct_buf[data->struct_ptr++] = be32(FDT_BEGIN_NODE);
+
+    uint8_t* name_buf = (uint8_t*)(data->struct_buf + data->struct_ptr);
+    memcpy(name_buf, node->name, name_len);
+    name_buf[name_len] = 0;
+    data->struct_ptr += name_cells;
+
+    do_foreach_prop(node, print_prop, opaque);
+    if (!data->print_success)
+        return SMOLDTB_FOREACH_ABORT;
+    do_foreach_sibling(node->child, print_node, opaque);
+    if (!data->print_success)
+        return SMOLDTB_FOREACH_ABORT;
+
+    if (data->struct_ptr + 1 > data->struct_buf_size) /* bounds check */
+    {
+        data->print_success = false;
+        return SMOLDTB_FOREACH_ABORT;
+    }
+    data->struct_buf[data->struct_ptr++] = be32(FDT_END_NODE);
+
+    return SMOLDTB_FOREACH_CONTINUE;
+}
+
+size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cpu_id)
+{
+    struct finalise_data final_data;
+    final_data.struct_buf_size = 0;
+    final_data.string_buf_size = 1; /* we'll use 1 byte for the empty string */
+
+    do_foreach_sibling(state.root, init_finalise_data, &final_data);
+    const size_t reserved_block_size = 2 * sizeof(uint64_t);
+    const size_t struct_buf_bytes = final_data.struct_buf_size * FDT_CELL_SIZE;
+    const size_t total_bytes = final_data.string_buf_size + struct_buf_bytes + 
+        sizeof(struct fdt_header) + reserved_block_size;
+
+    if (buffer == NULL || total_bytes < buffer_size)
+        return total_bytes;
+    if ((uintptr_t)buffer & 0b11)
+        return total_bytes; /* check buffer is aligned to a 32-bit boundary */
+
+    struct fdt_header* header = (struct fdt_header*)buffer;
+    header->magic = be32(FDT_MAGIC);
+    header->total_size = be32(total_bytes);
+    header->offset_structs = be32(sizeof(struct fdt_header) + 16); /* size of reserved block */
+    header->offset_strings = be32(be32(header->offset_structs) + struct_buf_bytes);
+    header->offset_memmap_rsvd = be32(sizeof(struct fdt_header));
+    header->version = be32(FDT_VERSION);
+    header->last_comp_version = be32(16); /* as per spec, this field must be 16. */
+    header->boot_cpu_id = be32(boot_cpu_id);
+    header->size_strings = be32(final_data.string_buf_size);
+    header->size_structs = be32(struct_buf_bytes);
+
+    /* Apparently the great minds behind the device tree spec were able to think far enough
+     * ahead to include size fields for the string and structure blocks, but not
+     * the reserved memory block. The end of this block is indicated by an entry filled
+     * with zeroes, because a size field would be too easy.
+     * So even though we dont use this block, we must include a single entry for it. */
+    uint64_t* reserved_block = (uint64_t*)(header + 1);
+    reserved_block[0] = 0;
+    reserved_block[1] = 0;
+
+    final_data.struct_buf = (uint32_t*)((uintptr_t)buffer + be32(header->offset_structs));
+    final_data.string_buf = (char*)((uintptr_t)buffer + be32(header->offset_strings));
+    final_data.struct_ptr = 0;
+    final_data.string_ptr = 1;
+    final_data.string_buf[0] = 0;
+
+    final_data.print_success = true;
+    do_foreach_sibling(state.root, print_node, &final_data);
+    return final_data.print_success ? total_bytes : SMOLDTB_FINALISE_FAILURE;
+}
 
 dtb_node* dtb_find_or_create_node(const char* path)
 {}

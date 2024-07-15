@@ -79,8 +79,10 @@ size_t dtb_read_prop_pairs(dtb_prop* prop, dtb_pair layout, dtb_pair* vals);
 size_t dtb_read_prop_triplets(dtb_prop* prop, dtb_triplet layout, dtb_triplet* vals);
 size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals);
 
-#ifndef SMOLDTB_ENABLE_WRITE_API
-size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size);
+#ifdef SMOLDTB_ENABLE_WRITE_API
+#define SMOLDTB_FINALISE_FAILURE ((size_t)-1)
+
+size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cpu_id);
 
 dtb_node* dtb_find_or_create_node(const char* path);
 dtb_node* dtb_create_sibling(dtb_node* node, const char* name);
