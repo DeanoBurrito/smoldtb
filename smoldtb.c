@@ -10,7 +10,7 @@
 
 #define FDT_VERSION 17
 #define FDT_CELL_SIZE 4
-#define ROOT_NODE_STR "/"
+#define ROOT_NODE_STR "\'/\'"
 
 #define SMOLDTB_FOREACH_CONTINUE 0
 #define SMOLDTB_FOREACH_ABORT 1
@@ -84,14 +84,18 @@ struct dtb_prop_t
     bool original;
 };
 
-/* Global parser state */
-struct dtb_state
+/* Info for initializing the global state during init */
+struct dtb_init_info
 {
     const uint32_t* cells;
     const char* strings;
     size_t cell_count;
-    dtb_node* root;
+};
 
+/* Global parser state */
+struct dtb_state
+{
+    dtb_node* root;
     dtb_node** handle_lookup;
     dtb_node* node_buff;
     size_t node_alloc_head;
@@ -101,7 +105,6 @@ struct dtb_state
     size_t prop_alloc_max;
 
     dtb_ops ops;
-    dtb_config cfg;
 };
 
 struct dtb_state state;
@@ -208,13 +211,6 @@ static void do_foreach_prop(dtb_node* node, int (*action)(dtb_node* node, dtb_pr
     }
 }
 
-/* Apply sane values to any config values not in config version reported by host. */
-static void sanitise_config()
-{
-    if (state.cfg.config_ver < 1)
-        state.cfg.writable = false;
-}
-
 static uintmax_t extract_cells(const uint32_t* cells, size_t count)
 {
     uintmax_t value = 0;
@@ -230,9 +226,8 @@ static dtb_node* alloc_node()
     if (state.node_alloc_head + 1 < state.node_alloc_max)
         return &state.node_buff[state.node_alloc_head++];
 
-    if (state.ops.on_error)
-        state.ops.on_error("Node allocator ran out of space");
-    return NULL; //TODO: redo these functions with writable api in mind
+    LOG_ERROR("Not enough space for source dtb node.");
+    return NULL;
 }
 
 static dtb_prop* alloc_prop()
@@ -240,8 +235,7 @@ static dtb_prop* alloc_prop()
     if (state.prop_alloc_head + 1 < state.prop_alloc_max)
         return &state.prop_buff[state.prop_alloc_head++];
 
-    if (state.ops.on_error)
-        state.ops.on_error("Property allocator ran out of space");
+    LOG_ERROR("Not enough space for source dtb property.");
     return NULL;
 }
 
@@ -253,8 +247,7 @@ static void free_buffers()
 #else
     if (state.ops.free == NULL)
     {
-        if (state.ops.on_error)
-            state.ops.on_error("ops.free() is NULL while trying to free buffers.");
+        LOG_ERROR("ops.free() is NULL while trying to free internal buffer.");
         return;
     }
 
@@ -270,15 +263,15 @@ static void free_buffers()
 #endif
 }
 
-static void alloc_buffers()
+static void alloc_buffers(struct dtb_init_info* init_info)
 {
     state.node_alloc_max = 0;
     state.prop_alloc_max = 0;
-    for (size_t i = 0; i < state.cell_count; i++)
+    for (size_t i = 0; i < init_info->cell_count; i++)
     {
-        if (be32(state.cells[i]) == FDT_BEGIN_NODE)
+        if (be32(init_info->cells[i]) == FDT_BEGIN_NODE)
             state.node_alloc_max++;
-        else if (be32(state.cells[i]) == FDT_PROP)
+        else if (be32(init_info->cells[i]) == FDT_PROP)
             state.prop_alloc_max++;
     }
 
@@ -289,8 +282,7 @@ static void alloc_buffers()
 #ifdef SMOLDTB_STATIC_BUFFER_SIZE
     if (total_size >= SMOLDTB_STATIC_BUFFER_SIZE)
     {
-        if (state.ops.on_error)
-            state.ops.on_error("Too much data for statically allocated buffer.");
+        LOG_ERROR("Too much data for statically allocated buffer.");
         return;
     }
     uint8_t* buffer = big_buff;
@@ -338,9 +330,9 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     }
 }
 
-static dtb_prop* parse_prop(size_t* offset)
+static dtb_prop* parse_prop(struct dtb_init_info* init_info, size_t* offset)
 {
-    if (be32(state.cells[*offset]) != FDT_PROP)
+    if (be32(init_info->cells[*offset]) != FDT_PROP)
         return NULL;
 
     (*offset)++;
@@ -351,9 +343,9 @@ static dtb_prop* parse_prop(size_t* offset)
         return NULL;
     }
 
-    const struct fdt_property* fdtprop = (struct fdt_property*)(state.cells + *offset);
-    prop->name = (const char*)(state.strings + be32(fdtprop->name_offset));
-    prop->first_cell = state.cells + *offset + 2;
+    const struct fdt_property* fdtprop = (struct fdt_property*)(init_info->cells + *offset);
+    prop->name = (const char*)(init_info->strings + be32(fdtprop->name_offset));
+    prop->first_cell = init_info->cells + *offset + 2;
     prop->length = be32(fdtprop->length);
     prop->original = true;
     (*offset) += (dtb_align_up(be32(fdtprop->length), 4) / 4) + 2;
@@ -361,9 +353,9 @@ static dtb_prop* parse_prop(size_t* offset)
     return prop;
 }
 
-static dtb_node* parse_node(size_t* offset)
+static dtb_node* parse_node(struct dtb_init_info* init_info, size_t* offset)
 {
-    if (be32(state.cells[*offset]) != FDT_BEGIN_NODE)
+    if (be32(init_info->cells[*offset]) != FDT_BEGIN_NODE)
         return NULL;
 
     dtb_node* node = alloc_node(); 
@@ -372,7 +364,7 @@ static dtb_node* parse_node(size_t* offset)
         LOG_ERROR("Node allocation failed");
         return NULL;
     }
-    node->name = (const char*)(state.cells + (*offset) + 1);
+    node->name = (const char*)(init_info->cells + (*offset) + 1);
     node->original = true;
 
     const size_t name_len = string_len(node->name);
@@ -380,9 +372,9 @@ static dtb_node* parse_node(size_t* offset)
         node->name = NULL;
     *offset += (dtb_align_up(name_len + 1, FDT_CELL_SIZE) / FDT_CELL_SIZE) + 1;
 
-    while (*offset < state.cell_count)
+    while (*offset < init_info->cell_count)
     {
-        const uint32_t test = be32(state.cells[*offset]);
+        const uint32_t test = be32(init_info->cells[*offset]);
         if (test == FDT_END_NODE)
         {
             (*offset)++;
@@ -390,7 +382,7 @@ static dtb_node* parse_node(size_t* offset)
         }
         else if (test == FDT_BEGIN_NODE)
         {
-            dtb_node* child = parse_node(offset);
+            dtb_node* child = parse_node(init_info, offset);
             if (child == NULL)
                 continue;
 
@@ -400,7 +392,7 @@ static dtb_node* parse_node(size_t* offset)
         }
         else if (test == FDT_PROP)
         {
-            dtb_prop* prop = parse_prop(offset);
+            dtb_prop* prop = parse_prop(init_info, offset);
             if (prop == NULL)
                 continue;
 
@@ -420,24 +412,21 @@ static dtb_node* parse_node(size_t* offset)
 
 size_t dtb_query_total_size(uintptr_t fdt_start)
 {
+    if (fdt_start == 0)
+        return 0;
+
     struct fdt_header* header = (struct fdt_header*)fdt_start;
+    if (be32(header->magic) != FDT_MAGIC)
+        return 0;
 
     return be32(header->total_size);
 }
 
-bool dtb_init_with_config(uintptr_t start, dtb_ops ops, const dtb_config* config)
+bool dtb_init(uintptr_t start, dtb_ops ops)
 {
     state.ops = ops;
 
-    if (config == NULL)
-    {
-        LOG_ERROR("Config argument cannot be null");
-        return false;
-    }
-    state.cfg = *config;
-    sanitise_config();
-
-#ifndef SMOLDTB_STATIC_BUFFER_SIZE
+#if !defined(SMOLDTB_STATIC_BUFFER_SIZE) || defined(SMOLDTB_ENABLE_WRITE_API)
     if (!state.ops.malloc)
     {
         LOG_ERROR("ops.malloc() is NULL");
@@ -445,6 +434,8 @@ bool dtb_init_with_config(uintptr_t start, dtb_ops ops, const dtb_config* config
     }
 #endif
 
+    struct dtb_init_info init_info;
+    //TODO: if passed 0 for arg, create empty tree for writing.
     struct fdt_header* header = (struct fdt_header*)start;
     if (be32(header->magic) != FDT_MAGIC)
     {
@@ -452,20 +443,20 @@ bool dtb_init_with_config(uintptr_t start, dtb_ops ops, const dtb_config* config
         return false;
     }
 
-    state.cells = (const uint32_t*)(start + be32(header->offset_structs));
-    state.cell_count = be32(header->size_structs) / sizeof(uint32_t);
-    state.strings = (const char*)(start + be32(header->offset_strings));
+    init_info.cells = (const uint32_t*)(start + be32(header->offset_structs));
+    init_info.cell_count = be32(header->size_structs) / sizeof(uint32_t);
+    init_info.strings = (const char*)(start + be32(header->offset_strings));
 
     if (state.node_buff)
         free_buffers();
-    alloc_buffers();
+    alloc_buffers(&init_info);
 
-    for (size_t i = 0; i < state.cell_count; i++)
+    for (size_t i = 0; i < init_info.cell_count; i++)
     {
-        if (be32(state.cells[i]) != FDT_BEGIN_NODE)
+        if (be32(init_info.cells[i]) != FDT_BEGIN_NODE)
             continue;
 
-        dtb_node* sub_root = parse_node(&i);
+        dtb_node* sub_root = parse_node(&init_info, &i);
         if (sub_root == NULL)
             continue;
         sub_root->sibling = state.root;
@@ -473,14 +464,6 @@ bool dtb_init_with_config(uintptr_t start, dtb_ops ops, const dtb_config* config
     }
 
     return true;
-}
-
-bool dtb_init(uintptr_t start, dtb_ops ops)
-{
-    dtb_config dummy_conf;
-    dummy_conf.config_ver = 0;
-
-    return dtb_init_with_config(start, ops, &dummy_conf);
 }
 
 dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
@@ -493,23 +476,11 @@ dtb_node* dtb_find_compatible(dtb_node* start, const char* str)
         begin_index++; //we want to start searching AFTER this node.
     }
 
-    const size_t compatstr_len = string_len(str);
     for (size_t i = begin_index; i < state.node_alloc_head; i++)
     {
         dtb_node* node = &state.node_buff[i];
-        dtb_prop* compat = dtb_find_prop(node, "compatible");
-        if (compat == NULL)
-            continue;
-
-        for (size_t ci = 0; ; ci++)
-        {
-            const char* compat_str = dtb_read_prop_string(compat, ci);
-            if (compat_str == NULL)
-                break;
-
-            if (strings_eq(compat_str, str, compatstr_len))
-                return node;
-        }
+        if (dtb_is_compatible(node, str))
+            return node;
     }
 
     return NULL;
@@ -520,7 +491,6 @@ dtb_node* dtb_find_phandle(unsigned handle)
     if (handle < state.node_alloc_max)
         return state.handle_lookup[handle];
 
-    //TODO: we should fallback on a linear search in this case.
     return NULL;
 }
 
@@ -546,7 +516,7 @@ dtb_node* dtb_find(const char* name)
 {
     size_t seg_len;
     dtb_node* scan = state.root;
-    while (scan)
+    while (scan != NULL)
     {
         while (name[0] == '/')
             name++;
@@ -630,9 +600,68 @@ dtb_prop* dtb_get_prop(dtb_node* node, size_t index)
     return NULL;
 }
 
-bool dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
+static size_t get_cells_helper(dtb_node* node, const char* prop_name, size_t orDefault)
 {
     if (node == NULL)
+        return orDefault;
+
+    dtb_prop* prop = dtb_find_prop(node, prop_name);
+    if (prop == NULL)
+        return orDefault;
+
+    uintmax_t ret_value;
+    if (dtb_read_prop_values(prop, 1, &ret_value) == 1)
+        return ret_value;
+    return orDefault;
+}
+
+size_t dtb_get_addr_cells_of(dtb_node* node)
+{
+    return get_cells_helper(node, "#address-cells", 2);
+}
+
+size_t dtb_get_size_cells_of(dtb_node* node)
+{
+    return get_cells_helper(node, "#size-cells", 1);
+}
+
+size_t dtb_get_addr_cells_for(dtb_node* node)
+{
+    if (node == NULL)
+        return 2;
+    return get_cells_helper(node->parent, "#address-cells", 2);
+}
+
+size_t dtb_get_size_cells_for(dtb_node* node)
+{
+    if (node == NULL)
+        return 1;
+    return get_cells_helper(node->parent, "#size-cells", 1);
+}
+
+bool dtb_is_compatible(dtb_node* node, const char* str)
+{
+    if (node == NULL || str == NULL)
+        return false;
+
+    dtb_prop* compat_prop = dtb_find_prop(node, "compatible");
+    if (compat_prop == NULL)
+        return false;
+
+    const size_t str_len = string_len(str);
+    for (size_t i = 0; ; i++)
+    {
+        const char* check_str = dtb_read_prop_string(compat_prop, i);
+        if (check_str == NULL)
+            return false;
+        if (strings_eq(check_str, str, str_len))
+            return true;
+    }
+}
+
+bool dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
+{
+    if (node == NULL || stat == NULL)
         return false;
 
     stat->name = node->name;
@@ -669,6 +698,17 @@ bool dtb_stat_node(dtb_node* node, dtb_node_stat* stat)
     return true;
 }
 
+bool dtb_stat_prop(dtb_prop* prop, dtb_prop_stat* stat)
+{
+    if (prop == NULL || stat == NULL)
+        return false;
+
+    stat->name = prop->name;
+    stat->data = prop->first_cell;
+    stat->data_len = prop->length;
+    return true;
+}
+
 const char* dtb_read_prop_string(dtb_prop* prop, size_t index)
 {
     if (prop == NULL)
@@ -690,7 +730,7 @@ const char* dtb_read_prop_string(dtb_prop* prop, size_t index)
     return NULL;
 }
 
-size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, size_t* vals)
+size_t dtb_read_prop_values(dtb_prop* prop, size_t cell_count, uintmax_t* vals)
 {
     if (prop == NULL || cell_count == 0)
         return 0;
@@ -771,7 +811,7 @@ size_t dtb_read_prop_quads(dtb_prop* prop, dtb_quad layout, dtb_quad* vals)
     return count;
 }
 
-#ifndef SMOLDTB_ENABLE_WRITE_API
+#ifdef SMOLDTB_ENABLE_WRITE_API
 /* ---- Section: Writable-Mode Private Functions ---- */
 
 struct finalise_data
@@ -788,6 +828,7 @@ struct finalise_data
 struct name_collision_check
 {
     const char* name;
+    size_t name_len;
     bool collision;
 };
 
@@ -918,9 +959,8 @@ static int print_node(dtb_node* node, void* opaque)
 static int check_sibling_name_collisions(dtb_node* node, void* opaque)
 {
     struct name_collision_check* check = opaque;
-    const size_t name_len = string_len(node->name);
 
-    if (!strings_eq(node->name, check->name, name_len))
+    if (!strings_eq(node->name, check->name, check->name_len))
         return SMOLDTB_FOREACH_CONTINUE;
 
     check->collision = true;
@@ -944,7 +984,7 @@ size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cp
     if (buffer == NULL || total_bytes < buffer_size)
         return total_bytes;
     if ((uintptr_t)buffer & 0b11)
-        return total_bytes; /* check buffer is aligned to a 32-bit boundary */
+        return SMOLDTB_FINALISE_FAILURE; /* check buffer is aligned to a 32-bit boundary */
 
     struct fdt_header* header = (struct fdt_header*)buffer;
     header->magic = be32(FDT_MAGIC);
@@ -979,7 +1019,41 @@ size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cp
 }
 
 dtb_node* dtb_find_or_create_node(const char* path)
-{}
+{
+    if (path == NULL)
+        return NULL;
+
+    size_t seg_len;
+    dtb_node* scan = state.root;
+    while (scan != NULL)
+    {
+        while (path[0] == '/')
+            path++;
+
+        seg_len = string_find_char(path, '/');
+        if (seg_len == -1ul)
+            seg_len = string_len(path);
+        if (seg_len == 0)
+            return scan;
+
+        dtb_node* next = find_child_internal(scan, path, seg_len);
+        if (next == NULL)
+            next = dtb_create_child(scan, path);
+        scan = next;
+    }
+
+    return NULL;
+}
+
+dtb_prop* dtb_find_or_create_prop(dtb_node* node, const char* name)
+{
+    if (node == NULL || name == NULL)
+        return NULL;
+
+    dtb_prop* prop = dtb_find_prop(node, name);
+    if (prop == NULL)
+        return dtb_create_prop(node, name);
+}
 
 dtb_node* dtb_create_sibling(dtb_node* node, const char* name)
 {
@@ -987,8 +1061,12 @@ dtb_node* dtb_create_sibling(dtb_node* node, const char* name)
         return NULL;
 
     struct name_collision_check check_data;
-    check_data.name = name;
     check_data.collision = false;
+    check_data.name = name;
+    check_data.name_len = string_len(name);
+    if (string_find_char(name, '/') < check_data.name_len)
+        check_data.name_len = string_find_char(name, '/');
+
     do_foreach_sibling(node->parent->child, check_sibling_name_collisions, &check_data);
     if (check_data.collision)
     {
@@ -1000,7 +1078,7 @@ dtb_node* dtb_create_sibling(dtb_node* node, const char* name)
     char* name_buf = state.ops.malloc(name_len + 1);
     memcpy(name_buf, name, name_len);
 
-    dtb_node* sibling = alloc_node();
+    dtb_node* sibling = state.ops.malloc(sizeof(dtb_node));
     if (sibling == NULL)
     {
         LOG_ERROR("Failed to allocate node for sibling.");
@@ -1009,6 +1087,7 @@ dtb_node* dtb_create_sibling(dtb_node* node, const char* name)
 
     sibling->name = name_buf;
     sibling->parent = node->parent;
+    sibling->original = false;
     sibling->sibling = node->sibling;
     node->sibling = sibling;
     return sibling;
@@ -1020,8 +1099,12 @@ dtb_node* dtb_create_child(dtb_node* node, const char* name)
         return NULL;
 
     struct name_collision_check check_data;
-    check_data.name = name;
     check_data.collision = false;
+    check_data.name = name;
+    check_data.name_len = string_len(name);
+    if (string_find_char(name, '/') < check_data.name_len)
+        check_data.name_len = string_find_char(name, '/');
+
     do_foreach_sibling(node->child, check_sibling_name_collisions, &check_data);
     if (check_data.collision)
     {
@@ -1033,7 +1116,7 @@ dtb_node* dtb_create_child(dtb_node* node, const char* name)
     char* name_buf = state.ops.malloc(name_len + 1);
     memcpy(name_buf, name, name_len);
 
-    dtb_node* child = alloc_node();
+    dtb_node* child = state.ops.malloc(sizeof(dtb_node));
     if (child == NULL)
     {
         LOG_ERROR("Failed to allocate node for child.");
@@ -1042,6 +1125,7 @@ dtb_node* dtb_create_child(dtb_node* node, const char* name)
 
     child->parent = node;
     child->name = name_buf;
+    child->original = false;
     child->sibling = node->child;
     node->child = child;
     return child;
@@ -1056,7 +1140,7 @@ dtb_prop* dtb_create_prop(dtb_node* node, const char* name)
     char* name_buf = state.ops.malloc(name_len + 1);
     memcpy(name_buf, name, name_len);
 
-    dtb_prop* prop = alloc_prop();
+    dtb_prop* prop = state.ops.malloc(sizeof(dtb_prop));
     if (prop == NULL)
     {
         LOG_ERROR("Failed to allocate property");
@@ -1066,6 +1150,7 @@ dtb_prop* dtb_create_prop(dtb_node* node, const char* name)
     prop->length = 0;
     prop->first_cell = NULL;
     prop->name = name_buf;
+    prop->original = false;
     prop->next = node->props;
     node->props = prop;
     return prop;
@@ -1074,10 +1159,7 @@ dtb_prop* dtb_create_prop(dtb_node* node, const char* name)
 bool dtb_destroy_node(dtb_node* node)
 {
     if (node == NULL)
-    {
-        LOG_ERROR("Cannot destroy NULL node");
         return false;
-    }
 
     if (node->parent != NULL) /* break linkage in parents list of child nodes */
     {
@@ -1146,7 +1228,7 @@ bool dtb_destroy_prop(dtb_node* node, dtb_prop* prop)
 bool dtb_write_prop_string(dtb_prop* prop, const char* str, size_t str_len)
 {}
 
-bool dtb_write_prop_values(dtb_prop* prop, size_t count, size_t cell_count, const size_t* vals)
+bool dtb_write_prop_values(dtb_prop* prop, size_t count, size_t cell_count, const uintmax_t* vals)
 {}
 
 bool dtb_write_prop_pairs(dtb_prop* prop, size_t count, dtb_pair layout, const dtb_pair* vals)
