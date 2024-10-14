@@ -6,15 +6,31 @@
 #include <sys/stat.h>
 #include "smoldtb.h"
 
+size_t total_errors = 0;
+size_t total_mallocs = 0;
+size_t total_frees = 0;
+size_t current_memory_usage = 0;
+
 void dtb_on_error(const char* why)
 {
-    printf("smol-dtb error: %s\r\n", why);
-    exit(1);
+    printf("smoldtb error %zu: %s\r\n", total_errors, why);
+    total_errors++;
 }
 
 void* dtb_malloc(size_t length)
 {
+    current_memory_usage += length;
+    printf("smoldtb malloc %zu: %zu (%zuB in use)\r\n", total_mallocs++, length, current_memory_usage);
     return malloc(length);
+}
+
+void dtb_free(void* ptr, size_t length)
+{
+    (void)length;
+
+    current_memory_usage -= length;
+    printf("smoldtb free %zu: %zu (%zuB in use)\r\n", total_frees++, length, current_memory_usage);
+    free(ptr);
 }
 
 static const char tree_corner = '\\';
@@ -100,6 +116,8 @@ static void print_file(const char* filename)
 
     munmap(buffer, out_len);
     close(fd);
+
+    printf("finalized in-memory dtb to file: %s\r\n", filename);
 }
 
 static void display_file(const char* filename, const char* output_filename)
@@ -127,6 +145,7 @@ static void display_file(const char* filename, const char* output_filename)
 
     dtb_ops ops;
     ops.malloc = dtb_malloc;
+    ops.free = dtb_free;
     ops.on_error = dtb_on_error;
     dtb_init((uintptr_t)buffer, ops);
 
