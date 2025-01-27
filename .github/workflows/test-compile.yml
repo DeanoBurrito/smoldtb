@@ -2,13 +2,22 @@ name: This should build
 on: [ push, pull_request ]
 
 jobs:
-  build-gcc:
+  build-gcc-64:
     runs-on: ubuntu-latest
     steps:
+    - name: Install GCC
+      run: sudo apt install gcc-multilib
     - uses: actions/checkout@v4
     - name: Compile
       run: make clean all
-    - name: Compile 2
+
+  build-gcc-32:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install GCC
+      run: sudo apt install gcc-multilib
+    - uses: actions/checkout@v4
+    - name: Compile
       run: CC="gcc -m32" make clean all
 
   build-clang:
@@ -19,7 +28,7 @@ jobs:
         target: [ x86-linux-gnu, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
-      run: sudo apt install clang
+      run: sudo apt install clang gcc-multilib
     - uses: actions/checkout@v4
     - name: Compile
       run: CC="clang --target=${{ matrix.target }}" make clean all
