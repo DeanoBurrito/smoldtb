@@ -100,6 +100,7 @@ struct dtb_state
     dtb_prop* prop_buff;
     size_t prop_alloc_head;
     size_t prop_alloc_max;
+    uint64_t* resv_memory;
 
     dtb_ops ops;
 };
@@ -122,6 +123,24 @@ static uint32_t be32(uint32_t input)
     temp |= (input & 0xFF00) << 8;
     temp |= (input & 0xFF0000) >> 8;
     temp |= (input & 0xFF000000) >> 24;
+    return temp;
+#endif
+}
+
+static uint64_t be64(uint64_t input)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return input;
+#else
+    uint64_t temp = 0;
+    temp |= ((input >>  0) & 0xFF) << 56;
+    temp |= ((input >>  8) & 0xFF) << 48;
+    temp |= ((input >> 16) & 0xFF) << 40;
+    temp |= ((input >> 24) & 0xFF) << 32;
+    temp |= ((input >> 32) & 0xFF) << 24;
+    temp |= ((input >> 40) & 0xFF) << 16;
+    temp |= ((input >> 48) & 0xFF) << 8;
+    temp |= ((input >> 56) & 0xFF) << 0;
     return temp;
 #endif
 }
@@ -464,6 +483,7 @@ bool dtb_init(uintptr_t start, dtb_ops ops)
         return false;
     }
 
+    state.resv_memory = (uint64_t*)(start + be32(header->offset_memmap_rsvd));
     init_info.cells = (const uint32_t*)(start + be32(header->offset_structs));
     init_info.cell_count = be32(header->size_structs) / sizeof(uint32_t);
     init_info.strings = (const char*)(start + be32(header->offset_strings));
@@ -732,6 +752,26 @@ bool dtb_stat_prop(dtb_prop* prop, dtb_prop_stat* stat)
     stat->data = prop->data;
     stat->data_len = prop->length;
     return true;
+}
+
+size_t dtb_read_resv_memory(size_t entry_count, dtb_reserved_memory* vals)
+{
+    size_t total_count = 0;
+    while (be64(state.resv_memory[total_count * 2] != 0))
+        total_count++;
+
+    if (entry_count == 0 || vals == NULL)
+        return total_count;
+
+    if (total_count < entry_count)
+        entry_count = total_count;
+    for (size_t i = 0; i < entry_count; i++)
+    {
+        vals[i].base = be64(state.resv_memory[i * 2]);
+        vals[i].length = be64(state.resv_memory[i * 2]);
+    }
+
+    return entry_count;
 }
 
 const char* dtb_read_prop_string(dtb_prop* prop, size_t index)
@@ -1018,14 +1058,14 @@ static int check_prop_name_collisions(dtb_node* node, dtb_prop* prop, void* opaq
 
 /* ---- Section: Writable-Mode Public API ---- */
 
-size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cpu_id)
+size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cpu_id, dtb_reserved_memory* resv, size_t resv_count)
 {
     struct finalise_data final_data;
     final_data.struct_buf_size = 0;
     final_data.string_buf_size = 1; /* we'll use 1 byte for the empty string */
 
     do_foreach_sibling(state.root, init_finalise_data, &final_data);
-    const size_t reserved_block_size = 2 * sizeof(uint64_t);
+    const size_t reserved_block_size = (resv_count + 1) * sizeof(dtb_reserved_memory);
     const size_t struct_buf_bytes = final_data.struct_buf_size * FDT_CELL_SIZE;
     const size_t total_bytes = final_data.string_buf_size + struct_buf_bytes + 
         sizeof(struct fdt_header) + reserved_block_size;
@@ -1047,14 +1087,14 @@ size_t dtb_finalise_to_buffer(void* buffer, size_t buffer_size, uint32_t boot_cp
     header->size_strings = be32(final_data.string_buf_size);
     header->size_structs = be32(struct_buf_bytes);
 
-    /* Apparently the great minds behind the device tree spec were able to think far enough
-     * ahead to include size fields for the string and structure blocks, but not
-     * the reserved memory block. The end of this block is indicated by an entry filled
-     * with zeroes, because a size field would be too easy.
-     * So even though we dont use this block, we must include a single entry for it. */
     uint64_t* reserved_block = (uint64_t*)(header + 1);
-    reserved_block[0] = 0;
-    reserved_block[1] = 0;
+    for (size_t i = 0; i < resv_count; i++)
+    {
+        reserved_block[i * 2 + 0] = be64(resv[i].base);
+        reserved_block[i * 2 + 1] = be64(resv[i].length);
+    }
+    reserved_block[resv_count * 2 + 0] = 0;
+    reserved_block[resv_count * 2 + 1] = 0;
 
     final_data.struct_buf = (uint32_t*)((uintptr_t)buffer + be32(header->offset_structs));
     final_data.string_buf = (char*)((uintptr_t)buffer + be32(header->offset_strings));
