@@ -8,13 +8,15 @@ jobs:
     - uses: actions/checkout@v4
     - name: Compile
       run: make clean all
+    - name: Compile 2
+      run: CC="gcc -m32" make clean all
 
   build-clang:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [ x86, x86_64, riscv32, riscv64, arm, arm64 ]
+        target: [ x86-linux-gnu, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
       run: sudo apt install clang
