@@ -1,0 +1,18 @@
+name: This should build
+on: [ push, pull_request ]
+
+jobs:
+  build-gcc:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: make clean all
+  build-clang:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download clang
+      run: apt install clang
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: make clean all
