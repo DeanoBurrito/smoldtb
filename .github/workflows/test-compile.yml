@@ -8,11 +8,15 @@ jobs:
     - uses: actions/checkout@v4
     - name: Compile
       run: make clean all
+
   build-clang:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [ x86, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
       run: sudo apt install clang
     - uses: actions/checkout@v4
     - name: Compile
-      run: make clean all
+      run: CC="clang --target${{ matrix.target }}" make clean all
