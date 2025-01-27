@@ -28,7 +28,7 @@ jobs:
         target: [ x86-linux-gnu, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
-      run: sudo apt install clang gcc-multilib
+      run: sudo apt install clang gcc-multilib lld
     - uses: actions/checkout@v4
     - name: Compile
       run: CC="clang --target=${{ matrix.target }}" make clean all
