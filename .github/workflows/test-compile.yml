@@ -12,6 +12,7 @@ jobs:
   build-clang:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [ x86, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:

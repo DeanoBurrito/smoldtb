@@ -4,34 +4,40 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#define SMOLDTB_ENABLE_WRITE_API
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define SMOLDTB_INIT_EMPTY_TREE 0
 
+#ifndef smoldtb_value
+#define smoldtb_value uintmax_t
+#endif
+
 typedef struct dtb_node_t dtb_node;
 typedef struct dtb_prop_t dtb_prop;
 
 typedef struct
 {
-    uintmax_t a;
-    uintmax_t b;
+    smoldtb_value a;
+    smoldtb_value b;
 } dtb_pair;
 
 typedef struct 
 {
-    uintmax_t a;
-    uintmax_t b;
-    uintmax_t c;
+    smoldtb_value a;
+    smoldtb_value b;
+    smoldtb_value c;
 } dtb_triplet;
 
 typedef struct
 {
-    uintmax_t a;
-    uintmax_t b;
-    uintmax_t c;
-    uintmax_t d;
+    smoldtb_value a;
+    smoldtb_value b;
+    smoldtb_value c;
+    smoldtb_value d;
 } dtb_quad;
 
 typedef struct
@@ -87,7 +93,7 @@ bool dtb_stat_prop(dtb_prop* prop, dtb_prop_stat* stat);
 
 size_t dtb_read_resv_memory(size_t entry_count, dtb_reserved_memory* vals);
 const char* dtb_read_prop_string(dtb_prop* prop, size_t index);
-size_t dtb_read_prop_1(dtb_prop* prop, size_t cell_count, uintmax_t* vals);
+size_t dtb_read_prop_1(dtb_prop* prop, size_t cell_count, smoldtb_value* vals);
 size_t dtb_read_prop_2(dtb_prop* prop, dtb_pair layout, dtb_pair* vals);
 size_t dtb_read_prop_3(dtb_prop* prop, dtb_triplet layout, dtb_triplet* vals);
 size_t dtb_read_prop_4(dtb_prop* prop, dtb_quad layout, dtb_quad* vals);
@@ -108,7 +114,7 @@ bool dtb_destroy_node(dtb_node* node);
 bool dtb_destroy_prop(dtb_prop* prop);
 
 bool dtb_write_prop_string(dtb_prop* prop, const char* str, size_t str_len);
-bool dtb_write_prop_1(dtb_prop* prop, size_t count, size_t cell_count, const uintmax_t* vals);
+bool dtb_write_prop_1(dtb_prop* prop, size_t count, size_t cell_count, const smoldtb_value* vals);
 bool dtb_write_prop_2(dtb_prop* prop, size_t count, dtb_pair layout, const dtb_pair* vals);
 bool dtb_write_prop_3(dtb_prop* prop, size_t count, dtb_triplet layout, const dtb_triplet* vals);
 bool dtb_write_prop_4(dtb_prop* prop, size_t count, dtb_quad layout, const dtb_quad* vals);

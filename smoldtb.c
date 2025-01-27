@@ -227,11 +227,11 @@ static void do_foreach_prop(dtb_node* node, int (*action)(dtb_node* node, dtb_pr
     }
 }
 
-static uintmax_t extract_cells(const uint32_t* cells, size_t count)
+static smoldtb_value extract_cells(const uint32_t* cells, size_t count)
 {
-    uintmax_t value = 0;
+    smoldtb_value value = 0;
     for (size_t i = 0; i < count; i++)
-        value |= (uintmax_t)be32(cells[i]) << ((count - 1 - i) * 32);
+        value |= (smoldtb_value)be32(cells[i]) << ((count - 1 - i) * 32);
     return value;
 }
 
@@ -346,7 +346,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     const size_t len_phandle = sizeof(str_phandle) - 1;
     if (name_len == len_phandle && strings_eq(prop->name, str_phandle, name_len))
     {
-        size_t handle;
+        smoldtb_value handle;
         dtb_read_prop_1(prop, 1, &handle);
         state.handle_lookup[handle] = node;
         return;
@@ -356,7 +356,7 @@ static void check_for_special_prop(dtb_node* node, dtb_prop* prop)
     const size_t len_lhandle = sizeof(str_lhandle) - 1;
     if (name_len == len_lhandle && strings_eq(prop->name, str_lhandle, name_len))
     {
-        size_t handle;
+        smoldtb_value handle;
         dtb_read_prop_1(prop, 1, &handle);
         state.handle_lookup[handle] = node;
         return;
@@ -654,9 +654,9 @@ static size_t get_cells_helper(dtb_node* node, const char* prop_name, size_t orD
     if (prop == NULL)
         return orDefault;
 
-    uintmax_t ret_value;
+    smoldtb_value ret_value;
     if (dtb_read_prop_1(prop, 1, &ret_value) == 1)
-        return ret_value;
+        return (size_t)ret_value;
     return orDefault;
 }
 
@@ -795,7 +795,7 @@ const char* dtb_read_prop_string(dtb_prop* prop, size_t index)
     return NULL;
 }
 
-size_t dtb_read_prop_1(dtb_prop* prop, size_t cell_count, uintmax_t* vals)
+size_t dtb_read_prop_1(dtb_prop* prop, size_t cell_count, smoldtb_value* vals)
 {
     if (prop == NULL || cell_count == 0)
         return 0;
@@ -1386,7 +1386,7 @@ static bool copy_prop_buffer(dtb_prop* prop, size_t buf_cells, const uint32_t* b
     return true;
 }
 
-bool dtb_write_prop_1(dtb_prop* prop, size_t count, size_t cell_count, const uintmax_t* vals)
+bool dtb_write_prop_1(dtb_prop* prop, size_t count, size_t cell_count, const smoldtb_value* vals)
 {
     const size_t buf_cells = count * cell_count;
     return copy_prop_buffer(prop, buf_cells, (const uint32_t*)vals);
