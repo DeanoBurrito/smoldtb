@@ -31,4 +31,4 @@ jobs:
       run: sudo apt install clang gcc-multilib lld
     - uses: actions/checkout@v4
     - name: Compile
-      run: CC="clang --target=${{ matrix.target }}" make clean all
+      run: CC="clang --target=${{ matrix.target }} -fuse-ld=lld" make clean all
