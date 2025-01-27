@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download clang
-      run: apt install clang
+      run: sudo apt install clang
     - uses: actions/checkout@v4
     - name: Compile
       run: make clean all
