@@ -25,10 +25,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ x86-linux-gnu, x86_64, riscv32, riscv64, arm, arm64 ]
+        target: [ i686, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
       run: sudo apt install clang gcc-multilib lld
     - uses: actions/checkout@v4
     - name: Compile
-      run: CC="clang --target=${{ matrix.target }} -fuse-ld=lld" make clean all
+      run: CC="clang --target=${{ matrix.target }} -fuse-ld=lld" LD_FLAGS="--target=${{ matrix.target }}" make clean all
