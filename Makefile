@@ -12,5 +12,5 @@ debug: all
 	gdb ./$(TARGET)
 
 clean:
-	rm $(TARGET)
+	-rm $(TARGET)
 
