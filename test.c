@@ -97,7 +97,7 @@ static void print_file(const char* filename)
         return;
     }
 
-    const size_t out_len = dtb_finalise_to_buffer(NULL, 0, 0);
+    const size_t out_len = dtb_finalise_to_buffer(NULL, 0, 0, NULL, 0);
     if (ftruncate(fd, out_len) != 0)
     {
         printf("ftruncate failed.\r\n");
@@ -111,7 +111,7 @@ static void print_file(const char* filename)
         return;
     }
 
-    if (dtb_finalise_to_buffer(buffer, out_len, 0) == SMOLDTB_FINALISE_FAILURE)
+    if (dtb_finalise_to_buffer(buffer, out_len, 0, NULL, 0) == SMOLDTB_FINALISE_FAILURE)
         printf("smoltdb reports finalise failure\r\n");
 
     munmap(buffer, out_len);

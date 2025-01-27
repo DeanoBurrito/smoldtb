@@ -1,0 +1,30 @@
+name: This should build
+on: [ push, pull_request ]
+
+jobs:
+  build-gcc:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install GCC
+      run: sudo apt install gcc-multilib
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: make clean all
+
+  build-gcc-32:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install GCC
+      run: sudo apt install gcc-multilib
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: CC="gcc -m32" make clean all
+
+  build-clang:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download clang
+      run: sudo apt install clang lld
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: CC="clang -fuse-ld=lld" LD="ld.lld" make clean all
