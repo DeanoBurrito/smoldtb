@@ -4,8 +4,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define SMOLDTB_ENABLE_WRITE_API
-
 #ifdef __cplusplus
 extern "C" {
 #endif

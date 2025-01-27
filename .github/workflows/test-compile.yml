@@ -2,7 +2,7 @@ name: This should build
 on: [ push, pull_request ]
 
 jobs:
-  build-gcc-64:
+  build-gcc:
     runs-on: ubuntu-latest
     steps:
     - name: Install GCC
@@ -22,13 +22,18 @@ jobs:
 
   build-clang:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [ i686, x86_64, riscv32, riscv64, arm, arm64 ]
     steps:
     - name: Download clang
-      run: sudo apt install clang gcc-multilib lld
+      run: sudo apt install clang lld
     - uses: actions/checkout@v4
     - name: Compile
-      run: CC="clang --target=${{ matrix.target }} -fuse-ld=lld" LD_FLAGS="--target=${{ matrix.target }}" make clean all
+      run: CC="clang -fuse-ld=lld" LD="ld.lld" make clean all
+
+  build-clang-32:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download clang
+      run: sudo apt install clang lld
+    - uses: actions/checkout@v4
+    - name: Compile
+      run: CC="clang -m32 -fuse-ld=lld" LD="ld.lld" make clean all
